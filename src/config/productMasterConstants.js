@@ -1,5 +1,5 @@
 export const PRODUCT_CATEGORIES = ["鮮魚", "塩干", "資材"];
-export const PRODUCT_STANDARDS = ["kg", "P"];
+export const PRODUCT_STANDARDS = ["kg", "P", "尾", "個", "枚", "C/S"];
 
 export const SUPPLIERS = [
   "佐賀魚",

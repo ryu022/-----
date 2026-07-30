@@ -1,3 +1,5 @@
+import { PRODUCT_STANDARDS } from "../config/productMasterConstants.js";
+
 export const productValidator = {
   validateRequired(input) {
     const errors = {};
@@ -12,6 +14,8 @@ export const productValidator = {
 
     if (!input.standard) {
       errors.standard = "規格は必須です。";
+    } else if (!PRODUCT_STANDARDS.includes(input.standard)) {
+      errors.standard = "規格の選択が不正です。";
     }
 
     if (!Number.isFinite(Number(input.cost)) || Number(input.cost) <= 0) {

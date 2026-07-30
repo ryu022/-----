@@ -1,4 +1,5 @@
 import { LEDGER_TABS, ROUTES } from "../config/constants.js";
+import { PRODUCT_STANDARDS } from "../config/productMasterConstants.js";
 import { createSectionCard, createTabBar } from "../components/ui.js";
 import { productService } from "../services/productService.js";
 
@@ -44,6 +45,7 @@ export const renderProductLedgerPage = ({ navigate }) => {
 
   let activeTab = LEDGER_TABS[0];
   let keyword = "";
+  let selectedStandard = "";
   const flashMessage = productService.consumeNotice();
 
   const tabWrap = document.createElement("section");
@@ -52,10 +54,21 @@ export const renderProductLedgerPage = ({ navigate }) => {
 
   const search = document.createElement("input");
   search.className = "text-input";
-  search.placeholder = "商品名 / 分類 / 仕入先で検索";
+  search.placeholder = "商品名 / 規格 / 分類 / 仕入先で検索";
   search.type = "search";
   search.addEventListener("input", (event) => {
     keyword = event.target.value;
+    renderList();
+  });
+
+  const standardFilter = document.createElement("select");
+  standardFilter.className = "select-input";
+  standardFilter.innerHTML = `
+    <option value="">全規格</option>
+    ${PRODUCT_STANDARDS.map((standard) => `<option value="${standard}">${standard}</option>`).join("")}
+  `;
+  standardFilter.addEventListener("change", (event) => {
+    selectedStandard = event.target.value;
     renderList();
   });
 
@@ -63,7 +76,8 @@ export const renderProductLedgerPage = ({ navigate }) => {
     listWrap.innerHTML = "";
     const target = productService.searchProducts({
       keyword,
-      category: activeTab
+      category: activeTab,
+      standard: selectedStandard
     });
 
     const body = document.createElement("div");
@@ -119,7 +133,10 @@ export const renderProductLedgerPage = ({ navigate }) => {
   };
 
   renderTabs();
-  searchWrap.appendChild(createSectionCard({ title: "検索", body: search }));
+  const searchBody = document.createElement("div");
+  searchBody.className = "field-grid";
+  searchBody.append(search, standardFilter);
+  searchWrap.appendChild(createSectionCard({ title: "検索", body: searchBody }));
   renderList();
 
   if (flashMessage) {

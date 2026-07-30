@@ -17,19 +17,20 @@ class ProductService {
     return this.repository.getAll();
   }
 
-  searchProducts({ keyword = "", category = "" }) {
+  searchProducts({ keyword = "", category = "", standard = "" }) {
     const normalizedKeyword = keyword.trim().toLowerCase();
 
     return this.repository.getAll().filter((product) => {
       const byCategory = category ? product.category === category : true;
+      const byStandard = standard ? product.standard === standard : true;
       const byKeyword = normalizedKeyword
-        ? [product.name, product.category, product.supplier]
+        ? [product.name, product.standard, product.category, product.supplier]
             .join(" ")
             .toLowerCase()
             .includes(normalizedKeyword)
         : true;
 
-      return byCategory && byKeyword;
+      return byCategory && byStandard && byKeyword;
     });
   }
 
