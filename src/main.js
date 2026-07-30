@@ -84,3 +84,11 @@ await assignmentService.initialize(productService.listProducts());
 await inventoryService.initialize();
 initRouter();
 render(getCurrentRoute());
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch((error) => {
+      console.error("Service Worker registration failed:", error);
+    });
+  });
+}
