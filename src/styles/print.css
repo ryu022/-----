@@ -1,0 +1,100 @@
+@page {
+  size: A4 portrait;
+  margin: 0;
+}
+
+@media print {
+  html,
+  body {
+    width: 210mm;
+    height: 297mm;
+    margin: 0;
+    padding: 0;
+    background: #fff;
+    color: #000;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body {
+    font-size: 10pt;
+  }
+
+  .app-header,
+  .icon-button,
+  .print-actions {
+    display: none !important;
+  }
+
+  .app-main {
+    width: 100%;
+    padding: 0;
+  }
+
+  .panel-card {
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+  }
+
+  .print-preview-pages {
+    display: block;
+    gap: 0;
+  }
+
+  .print-sheet {
+    width: 210mm;
+    min-height: 297mm;
+    box-sizing: border-box;
+    border: 0;
+    border-radius: 0;
+    padding: 8mm 10mm 8mm 10mm;
+    margin: 0;
+    box-shadow: none;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .print-sheet.is-last-page {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  .print-sheet.is-new-department {
+    page-break-before: always;
+    break-before: page;
+  }
+
+  .print-sheet__header {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(180px, 0.9fr);
+    margin-bottom: 6mm;
+    padding-bottom: 2mm;
+  }
+
+  .print-sheet__meta {
+    font-size: 10pt;
+  }
+
+  .print-sheet__title {
+    font-size: 16pt;
+  }
+
+  .print-stamp__box {
+    width: 58px;
+    height: 58px;
+  }
+
+  .inventory-print-table {
+    font-size: 8.4pt;
+  }
+
+  .inventory-print-table th,
+  .inventory-print-table td {
+    padding: 3px 4px;
+  }
+
+  .print-sheet__footer {
+    margin-top: 6mm;
+    gap: 4mm;
+  }
+}

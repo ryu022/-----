@@ -1,0 +1,42 @@
+[
+  {
+    "id": "P000001",
+    "name": "真あじ",
+    "standard": "kg",
+    "category": "鮮魚",
+    "cost": 280,
+    "supplier": "佐賀魚"
+  },
+  {
+    "id": "P000002",
+    "name": "塩さば",
+    "standard": "P",
+    "category": "塩干",
+    "cost": 198,
+    "supplier": "久留米"
+  },
+  {
+    "id": "P000003",
+    "name": "しらす干し",
+    "standard": "kg",
+    "category": "塩干",
+    "cost": 240,
+    "supplier": "ショクリュー"
+  },
+  {
+    "id": "P000004",
+    "name": "まぐろ切り落とし",
+    "standard": "kg",
+    "category": "鮮魚",
+    "cost": 320,
+    "supplier": "CGC"
+  },
+  {
+    "id": "P000005",
+    "name": "ラップ",
+    "standard": "P",
+    "category": "資材",
+    "cost": 120,
+    "supplier": "森田物産"
+  }
+]

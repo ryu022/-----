@@ -1,0 +1,67 @@
+[
+  {
+    "assignmentId": "A000001",
+    "productId": "P000001",
+    "isTarget": true,
+    "salesFloor": true,
+    "backyard": true,
+    "materials": false,
+    "salesFloorOrder": 1,
+    "backyardOrder": 2,
+    "materialsOrder": null,
+    "createdAt": "2026-07-30T00:00:00.000Z",
+    "updatedAt": "2026-07-30T00:00:00.000Z"
+  },
+  {
+    "assignmentId": "A000002",
+    "productId": "P000002",
+    "isTarget": true,
+    "salesFloor": true,
+    "backyard": true,
+    "materials": false,
+    "salesFloorOrder": 2,
+    "backyardOrder": 1,
+    "materialsOrder": null,
+    "createdAt": "2026-07-30T00:00:00.000Z",
+    "updatedAt": "2026-07-30T00:00:00.000Z"
+  },
+  {
+    "assignmentId": "A000003",
+    "productId": "P000003",
+    "isTarget": false,
+    "salesFloor": false,
+    "backyard": false,
+    "materials": false,
+    "salesFloorOrder": null,
+    "backyardOrder": null,
+    "materialsOrder": null,
+    "createdAt": "2026-07-30T00:00:00.000Z",
+    "updatedAt": "2026-07-30T00:00:00.000Z"
+  },
+  {
+    "assignmentId": "A000004",
+    "productId": "P000004",
+    "isTarget": true,
+    "salesFloor": true,
+    "backyard": false,
+    "materials": false,
+    "salesFloorOrder": 3,
+    "backyardOrder": null,
+    "materialsOrder": null,
+    "createdAt": "2026-07-30T00:00:00.000Z",
+    "updatedAt": "2026-07-30T00:00:00.000Z"
+  },
+  {
+    "assignmentId": "A000005",
+    "productId": "P000005",
+    "isTarget": true,
+    "salesFloor": false,
+    "backyard": false,
+    "materials": true,
+    "salesFloorOrder": null,
+    "backyardOrder": null,
+    "materialsOrder": 1,
+    "createdAt": "2026-07-30T00:00:00.000Z",
+    "updatedAt": "2026-07-30T00:00:00.000Z"
+  }
+]
