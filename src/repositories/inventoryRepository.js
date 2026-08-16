@@ -183,7 +183,7 @@ export class InventoryRepository {
       await gasApiClient.request({
         entity: "inventorySessions",
         action: "upsert",
-        payload: { item: normalized }
+        payload: { storeId: this.storeId, item: normalized }
       });
       return { success: true, session: normalized };
     } catch (error) {
@@ -245,6 +245,10 @@ export class InventoryRepository {
   }
 
   async completeSession({ sessionId, completedBy = "" }) {
+    if (!this.storeId) {
+      return { success: false, error: "店舗情報が未設定のため棚卸完了できません。" };
+    }
+
     const index = this.sessions.findIndex((session) => session.sessionId === sessionId);
     if (index < 0) {
       return { success: false, error: "棚卸セッションが見つかりません。" };
@@ -275,10 +279,26 @@ export class InventoryRepository {
       await gasApiClient.request({
         entity: "inventorySessions",
         action: "complete",
-        payload: { item: completedSession }
+        payload: {
+          storeId: this.storeId,
+          sessionId,
+          item: completedSession
+        }
       });
       return { success: true, session: clone(completedSession) };
     } catch (error) {
+      console.error("[COMPLETE ERROR]", {
+        entity: "inventorySessions",
+        action: "complete",
+        storeId: this.storeId,
+        sessionId,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorStack: error instanceof Error ? error.stack : "",
+        gasErrorCode: error?.gasErrorCode ?? "",
+        gasErrorMessage: error?.gasErrorMessage ?? "",
+        gasErrorStack: error?.gasErrorStack ?? "",
+        httpStatus: error?.httpStatus ?? ""
+      });
       this.lastSyncError = error instanceof Error ? error.message : "session complete failed";
       return {
         success: false,
@@ -292,6 +312,14 @@ export class InventoryRepository {
     const targets = new Set((sessionIds || []).filter(Boolean));
     if (targets.size === 0) {
       return { success: true, deletedCount: 0 };
+    }
+
+    if (!this.storeId) {
+      return {
+        success: false,
+        error: "店舗情報が未設定のため削除できません。",
+        deletedCount: 0
+      };
     }
 
     if (!gasApiClient.isEnabled()) {
@@ -309,10 +337,19 @@ export class InventoryRepository {
     }
 
     try {
+      const payload = { storeId: this.storeId, sessionIds: Array.from(targets) };
+      console.info("inventory bulk delete request", {
+        entity: "inventorySessions",
+        action: "bulkDelete",
+        storeId: this.storeId,
+        sessionIds: payload.sessionIds,
+        payload
+      });
+
       await gasApiClient.request({
         entity: "inventorySessions",
         action: "bulkDelete",
-        payload: { sessionIds: Array.from(targets) }
+        payload
       });
 
       const beforeCount = this.sessions.length;
@@ -410,7 +447,7 @@ export class InventoryRepository {
       await gasApiClient.request({
         entity: "inventoryRecords",
         action: "upsert",
-        payload: { item: payloadItem }
+        payload: { storeId: this.storeId, item: payloadItem }
       });
       return { success: true };
     } catch (error) {

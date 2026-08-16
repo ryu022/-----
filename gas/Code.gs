@@ -72,16 +72,55 @@ function handleRequest_(e, isGet) {
     const result = executeAction_(entity, action, data, storeId);
     return jsonResponse_({ success: true, data: result });
   } catch (error) {
-    const message = error && error.message ? error.message : "サーバーエラーが発生しました。";
-    console.error("GAS request failed", message, error);
+    const message = String((error && error.message) ? error.message : error || "");
+    const stack = String((error && error.stack) ? error.stack : "");
+    const payload = parsePayload_(e, isGet);
+    const data = payload.payload || {};
+    const effectiveStoreId = normalizeStoreId_(payload.storeId || data.storeId || (e && e.parameter ? e.parameter.storeId : ""));
+    const sessionId = String(data.sessionId || data.item?.sessionId || "");
+    const details = {
+      entity: payload.entity || "",
+      action: payload.action || "",
+      storeId: effectiveStoreId,
+      sessionId,
+      message,
+      stack
+    };
+
+    console.error("[REQUEST_ERROR]", details);
+    Logger.log("[REQUEST_ERROR] " + JSON.stringify(details));
+
     return jsonResponse_({
       success: false,
       error: {
         code: "GAS_ERROR",
-        message: "通信に失敗しました。もう一度お試しください。"
+        message: message,
+        stack: stack
       }
     });
   }
+}
+
+function classifyErrorCode_(message) {
+  const text = String(message || "");
+
+  if (text.indexOf("Unsupported") >= 0) {
+    return "UNSUPPORTED_OPERATION";
+  }
+
+  if (text.indexOf("storeId is required") >= 0) {
+    return "STORE_ID_REQUIRED";
+  }
+
+  if (text.indexOf("sessionId is required") >= 0) {
+    return "SESSION_ID_REQUIRED";
+  }
+
+  if (text.indexOf("Sheet not found") >= 0) {
+    return "SHEET_NOT_FOUND";
+  }
+
+  return "GAS_ERROR";
 }
 
 function parsePayload_(e, isGet) {
@@ -204,9 +243,32 @@ function handleAssignments_(action, payload, storeId) {
 }
 
 function handleInventorySessions_(action, payload, storeId) {
+  const traceBase = {
+    entity: "inventorySessions",
+    action,
+    rawStoreId: extractStoreIdFromPayload_(payload, storeId),
+    payloadStoreId: payload && payload.storeId ? String(payload.storeId) : "",
+    sessionId: String(payload?.sessionId || payload?.item?.sessionId || "")
+  };
+
+  console.info("[INVENTORY_SESSIONS] start", traceBase);
+
+  const completeTrace = function (step, extra) {
+    const detail = Object.assign({}, traceBase, { step: step }, extra || {});
+    console.info("[COMPLETE]", detail);
+    Logger.log("[COMPLETE] " + JSON.stringify(detail));
+  };
+
   const sessionSheet = getSheet_(SHEETS.INVENTORY_SESSIONS);
+  completeTrace("sessionSheet obtained", { sheetName: sessionSheet.getName() });
+
   const recordSheet = getSheet_(SHEETS.INVENTORY);
+  completeTrace("recordSheet obtained", { sheetName: recordSheet.getName() });
+
+  const rawStoreId = extractStoreIdFromPayload_(payload, storeId);
   const targetStoreId = normalizeStoreId_(storeId || (payload && payload.storeId) || "");
+
+  completeTrace("storeId resolved", { rawStoreId: rawStoreId, targetStoreId: targetStoreId });
 
   if (action === "list") {
     const sessionRows = filterRowsByStoreId_(readRows_(sessionSheet), targetStoreId);
@@ -217,14 +279,56 @@ function handleInventorySessions_(action, payload, storeId) {
   }
 
   if (action === "upsert" || action === "complete") {
+    if (action === "complete") {
+      completeTrace("storeId validate start");
+      requireStoreId_(rawStoreId, "inventorySessions", action);
+      completeTrace("storeId validated");
+    }
+
     const item = sanitizeSession_(payload.item || payload, targetStoreId);
+
+    if (action === "complete") {
+      completeTrace("session payload sanitized", {
+        sessionId: item.sessionId,
+        status: item.status,
+        completedAt: item.completedAt,
+        completedBy: item.completedBy
+      });
+    }
+
+    if (action === "complete" && !item.sessionId) {
+      throw new Error("sessionId is required for inventorySessions complete");
+    }
+
+    if (action === "complete") {
+      completeTrace("sessionId validated", { sessionId: item.sessionId });
+    }
+
     if (action === "complete") {
       item.status = "completed";
       item.completedAt = item.completedAt || new Date().toISOString();
+      completeTrace("status/completedAt applied", {
+        status: item.status,
+        completedAt: item.completedAt,
+        completedBy: item.completedBy
+      });
     }
 
     item.updatedAt = new Date().toISOString();
-    upsertByKey_(sessionSheet, "sessionId", item, targetStoreId);
+    if (action === "complete") {
+      completeTrace("session update start", { keyName: "sessionId" });
+    }
+    upsertByKey_(sessionSheet, "sessionId", item, targetStoreId, {
+      flow: action === "complete" ? "COMPLETE:SESSION" : "UPSERT:SESSION",
+      entity: "inventorySessions",
+      action: action,
+      keyName: "sessionId",
+      keyValue: item.sessionId,
+      targetStoreId: targetStoreId
+    });
+    if (action === "complete") {
+      completeTrace("session update complete", { keyName: "sessionId", keyValue: item.sessionId });
+    }
 
     const sessionRow = {
       recordId: "SESSION:" + item.sessionId,
@@ -238,16 +342,33 @@ function handleInventorySessions_(action, payload, storeId) {
       updatedAt: new Date().toISOString(),
       updatedBy: item.updatedBy || ""
     };
-    upsertByKey_(recordSheet, "recordId", sessionRow, targetStoreId);
+    if (action === "complete") {
+      completeTrace("legacy session update start", { keyName: "recordId", keyValue: sessionRow.recordId });
+    }
+    upsertByKey_(recordSheet, "recordId", sessionRow, targetStoreId, {
+      flow: action === "complete" ? "COMPLETE:LEGACY_SESSION_ROW" : "UPSERT:LEGACY_SESSION_ROW",
+      entity: "inventorySessions",
+      action: action,
+      keyName: "recordId",
+      keyValue: sessionRow.recordId,
+      targetStoreId: targetStoreId
+    });
+    if (action === "complete") {
+      completeTrace("legacy session update complete", { keyName: "recordId", keyValue: sessionRow.recordId });
+      completeTrace("finished", { sessionId: item.sessionId, storeId: targetStoreId });
+    }
+
     clearCache_("inventorySessions:list:{}");
     clearCache_("inventoryRecords:list:{}");
     return toSessionResponse_(item);
   }
 
   if (action === "delete") {
+    requireStoreId_(rawStoreId, "inventorySessions", action);
+
     const sessionId = String(payload.sessionId || "");
     if (!sessionId) {
-      return { deletedSessionCount: 0, deletedRecordCount: 0 };
+      throw new Error("sessionId is required for inventorySessions delete");
     }
 
     const result = deleteBySessionIds_([sessionId], targetStoreId);
@@ -257,15 +378,35 @@ function handleInventorySessions_(action, payload, storeId) {
   }
 
   if (action === "bulkDelete") {
+    const bulkTrace = function (step, extra) {
+      const detail = Object.assign({}, traceBase, { step: step }, extra || {});
+      console.info("[BULK_DELETE]", detail);
+      Logger.log("[BULK_DELETE] " + JSON.stringify(detail));
+    };
+
+    bulkTrace("start");
+    requireStoreId_(rawStoreId, "inventorySessions", action);
+    bulkTrace("storeId validated", { rawStoreId: rawStoreId, targetStoreId: targetStoreId });
+
     const sessionIds = (payload.sessionIds || []).map(function (id) {
       return String(id || "").trim();
     }).filter(function (id) {
       return Boolean(id);
     });
 
+    bulkTrace("sessionIds parsed", { sessionIds: sessionIds, count: sessionIds.length });
+
+    if (sessionIds.length === 0) {
+      bulkTrace("sessionIds empty - no operation");
+      return { deletedSessionCount: 0, deletedRecordCount: 0 };
+    }
+
+    bulkTrace("deleteBySessionIds start");
     const result = deleteBySessionIds_(sessionIds, targetStoreId);
+    bulkTrace("deleteBySessionIds complete", result);
     clearCache_("inventorySessions:list:{}");
     clearCache_("inventoryRecords:list:{}");
+    bulkTrace("finished", { storeId: targetStoreId });
     return result;
   }
 
@@ -274,6 +415,7 @@ function handleInventorySessions_(action, payload, storeId) {
 
 function handleInventoryRecords_(action, payload, storeId) {
   const sheet = getSheet_(SHEETS.INVENTORY);
+  const rawStoreId = extractStoreIdFromPayload_(payload, storeId);
   const targetStoreId = normalizeStoreId_(storeId || (payload && payload.storeId) || "");
 
   if (action === "list" || action === "getInventory") {
@@ -292,9 +434,11 @@ function handleInventoryRecords_(action, payload, storeId) {
   }
 
   if (action === "deleteBySession") {
+    requireStoreId_(rawStoreId, "inventoryRecords", action);
+
     const sessionId = String(payload.sessionId || "").trim();
     if (!sessionId) {
-      return { deletedRecordCount: 0 };
+      throw new Error("sessionId is required for inventoryRecords deleteBySession");
     }
 
     const result = deleteRecordsBySessionId_(sessionId, targetStoreId);
@@ -303,6 +447,34 @@ function handleInventoryRecords_(action, payload, storeId) {
   }
 
   throw new Error("Unsupported inventoryRecords action: " + action);
+}
+
+function extractStoreIdFromPayload_(payload, storeId) {
+  if (storeId) {
+    return String(storeId).trim();
+  }
+
+  if (!payload) {
+    return "";
+  }
+
+  if (payload.storeId) {
+    return String(payload.storeId).trim();
+  }
+
+  if (payload.item && payload.item.storeId) {
+    return String(payload.item.storeId).trim();
+  }
+
+  return "";
+}
+
+function requireStoreId_(storeId, entity, action) {
+  if (String(storeId || "").trim()) {
+    return;
+  }
+
+  throw new Error("storeId is required for " + entity + " " + action);
 }
 
 function handleInventory_(action, payload, storeId) {
@@ -326,6 +498,14 @@ function ensureSheets_() {
     const valid = header.every(function (col, index) {
       return existing[index] === col;
     });
+
+    console.info("[SHEET_HEADER_CHECK]", {
+      sheetName: name,
+      expectedHeader: header,
+      existingHeader: existing,
+      valid: valid
+    });
+    Logger.log("[SHEET_HEADER_CHECK] " + JSON.stringify({ sheetName: name, valid: valid }));
 
     if (!valid) {
       sheet.getRange(1, 1, 1, header.length).setValues([header]);
@@ -369,11 +549,34 @@ function readRows_(sheet) {
   return rows;
 }
 
-function upsertByKey_(sheet, keyName, item, storeId) {
+function upsertByKey_(sheet, keyName, item, storeId, traceContext) {
+  const context = traceContext || {};
+  const sheetName = sheet.getName();
+
+  console.info("[UPSERT] start", {
+    flow: context.flow || "",
+    sheetName: sheetName,
+    keyName: keyName,
+    keyValue: String(item && item[keyName] ? item[keyName] : ""),
+    storeId: storeId || ""
+  });
+
   const lock = LockService.getDocumentLock();
+  console.info("[UPSERT] lock wait start", { flow: context.flow || "", sheetName: sheetName });
   lock.waitLock(10000);
+  console.info("[UPSERT] lock acquired", { flow: context.flow || "", sheetName: sheetName });
+
   try {
-    const header = HEADERS[sheet.getName()];
+    const header = HEADERS[sheetName];
+    if (!header) {
+      console.error("[UPSERT] header undefined", {
+        flow: context.flow || "",
+        sheetName: sheetName,
+        knownHeaders: Object.keys(HEADERS)
+      });
+      throw new Error("HEADERS is undefined for sheet: " + sheetName);
+    }
+
     const storeFilter = normalizeStoreId_(storeId || item.storeId || "");
     const data = readRows_(sheet).filter(function (row) {
       return !storeFilter || String(row.storeId || "") === storeFilter;
@@ -387,13 +590,27 @@ function upsertByKey_(sheet, keyName, item, storeId) {
     });
 
     if (rowIndex < 0) {
+      console.info("[UPSERT] appendRow", {
+        flow: context.flow || "",
+        sheetName: sheetName,
+        keyName: keyName,
+        keyValue: String(item && item[keyName] ? item[keyName] : "")
+      });
       sheet.appendRow(rowValues);
       return;
     }
 
     const targetRow = data[rowIndex];
+    console.info("[UPSERT] setValues", {
+      flow: context.flow || "",
+      sheetName: sheetName,
+      rowNumber: targetRow.__rowNumber,
+      keyName: keyName,
+      keyValue: String(item && item[keyName] ? item[keyName] : "")
+    });
     sheet.getRange(targetRow.__rowNumber, 1, 1, header.length).setValues([rowValues]);
   } finally {
+    console.info("[UPSERT] lock release", { flow: context.flow || "", sheetName: sheetName });
     lock.releaseLock();
   }
 }
@@ -494,6 +711,12 @@ function deleteBySessionIds_(sessionIds, storeId) {
     return Boolean(id);
   });
 
+  console.info("[DELETE_BY_SESSION_IDS] parsed", {
+    storeId: storeId,
+    sessionIds: ids,
+    count: ids.length
+  });
+
   if (ids.length === 0) {
     return { deletedSessionCount: 0, deletedRecordCount: 0 };
   }
@@ -521,8 +744,18 @@ function deleteRecordsBySessionId_(sessionId, storeId) {
 }
 
 function deleteRowsByMatcher_(sheet, matcher, storeId) {
+  const sheetName = sheet.getName();
+
+  console.info("[DELETE_ROWS] start", {
+    sheetName: sheetName,
+    storeId: storeId
+  });
+
   const lock = LockService.getDocumentLock();
+  console.info("[DELETE_ROWS] lock wait start", { sheetName: sheetName });
   lock.waitLock(10000);
+  console.info("[DELETE_ROWS] lock acquired", { sheetName: sheetName });
+
   try {
     const storeFilter = normalizeStoreId_(storeId || "");
     const rows = readRows_(sheet).filter(function (row) {
@@ -544,8 +777,14 @@ function deleteRowsByMatcher_(sheet, matcher, storeId) {
       sheet.deleteRow(rowNumber);
     });
 
+    console.info("[DELETE_ROWS] complete", {
+      sheetName: sheetName,
+      deletedCount: rowNumbers.length
+    });
+
     return rowNumbers.length;
   } finally {
+    console.info("[DELETE_ROWS] lock release", { sheetName: sheetName });
     lock.releaseLock();
   }
 }

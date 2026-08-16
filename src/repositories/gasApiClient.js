@@ -92,24 +92,110 @@ export class GasApiClient {
     try {
       window.dispatchEvent(new CustomEvent("repo:network", { detail: { status: "loading", entity, action } }));
 
-      const response = await fetch(this.endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": runtimeConfig.requestContentType,
-          Accept: "application/json"
-        },
-        body: JSON.stringify({ entity, action, payload }),
-        signal: controller.signal,
-        mode: "cors"
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+      let response;
+      try {
+        response = await fetch(this.endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": runtimeConfig.requestContentType,
+            Accept: "application/json"
+          },
+          body: JSON.stringify({ entity, action, payload }),
+          signal: controller.signal,
+          mode: "cors"
+        });
+      } catch (fetchError) {
+        console.error("[GAS FETCH ERROR]", {
+          entity,
+          action,
+          errorName: fetchError?.name ?? "",
+          errorMessage: fetchError?.message ?? String(fetchError ?? ""),
+          errorStack: fetchError?.stack ?? ""
+        });
+        throw fetchError;
       }
 
-      const json = await response.json();
-      if (!json.success) {
-        throw new Error(json.message ?? "GAS request failed");
+      const httpStatus = response.status;
+      const statusText = response.statusText || "";
+      const responseOk = response.ok;
+      const contentType = response.headers.get("content-type") || "";
+      const rawText = await response.text();
+
+      console.error("[GAS RAW RESPONSE]", {
+        entity,
+        action,
+        status: httpStatus,
+        ok: responseOk,
+        statusText,
+        contentType,
+        rawText
+      });
+
+      let json = null;
+      let parseError = null;
+      if (rawText) {
+        try {
+          json = JSON.parse(rawText);
+        } catch (error) {
+          parseError = error;
+        }
+      }
+
+      if (parseError) {
+        console.error("[GAS PARSE ERROR]", {
+          entity,
+          action,
+          status: httpStatus,
+          ok: responseOk,
+          contentType,
+          parseErrorMessage: parseError?.message ?? String(parseError ?? ""),
+          parseErrorStack: parseError?.stack ?? "",
+          rawText
+        });
+
+        const parseFailureMessage = responseOk
+          ? rawText || parseError?.message || "GAS request failed"
+          : `HTTP ${httpStatus} ${statusText}`.trim();
+        throw new Error(parseFailureMessage);
+      }
+
+      const gasErrorCode = json?.error?.code ?? "";
+      const gasErrorMessage = json?.error?.message ?? "";
+      const gasErrorStack = json?.error?.stack ?? "";
+
+      if (!responseOk || !json?.success) {
+        const fallbackMessage = responseOk
+          ? "Googleスプレッドシートとの通信に失敗しました。"
+          : `HTTP ${httpStatus} ${statusText}`.trim();
+        const message = gasErrorMessage || json?.message || fallbackMessage || "Googleスプレッドシートとの通信に失敗しました。";
+
+        console.error("[GAS ERROR]", {
+          entity,
+          action,
+          errorCode: gasErrorCode,
+          errorMessage: gasErrorMessage,
+          errorStack: gasErrorStack,
+          httpStatus
+        });
+
+        console.error("GAS request failed", {
+          entity,
+          action,
+          httpStatus,
+          gasErrorCode,
+          gasErrorMessage,
+          gasErrorStack,
+          payload
+        });
+
+        const requestError = new Error(message);
+        requestError.gasErrorCode = gasErrorCode;
+        requestError.gasErrorMessage = gasErrorMessage;
+        requestError.gasErrorStack = gasErrorStack;
+        requestError.httpStatus = httpStatus;
+        requestError.entity = entity;
+        requestError.action = action;
+        throw requestError;
       }
 
       window.dispatchEvent(new CustomEvent("repo:network", { detail: { status: "success", entity, action } }));
