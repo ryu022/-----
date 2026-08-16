@@ -54,6 +54,7 @@ export class InventoryRepository {
     this.activeSessionId = "";
     this.storeId = getRuntimeStoreId();
     this.lastSyncError = "";
+    this.loadedSessionRecordIds = new Set();
   }
 
   async initialize() {
@@ -105,6 +106,7 @@ export class InventoryRepository {
   setStoreId(storeId) {
     const nextStoreId = storeId || getRuntimeStoreId() || "default";
     this.storeId = nextStoreId;
+    this.loadedSessionRecordIds = new Set();
 
     const localSessions = window.localStorage.getItem(getSessionStorageKey(this.storeId));
     const localRecords = window.localStorage.getItem(getRecordStorageKey(this.storeId));
@@ -198,6 +200,48 @@ export class InventoryRepository {
 
   getRecordsBySession(sessionId) {
     return clone(this.records.filter((record) => record.sessionId === sessionId));
+  }
+
+  hasRecordsForSession(sessionId) {
+    return this.records.some((record) => record.sessionId === sessionId);
+  }
+
+  async loadRecordsBySessionId(sessionId, { force = false } = {}) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    if (!normalizedSessionId) {
+      return [];
+    }
+
+    if (!gasApiClient.isEnabled()) {
+      return this.getRecordsBySession(normalizedSessionId);
+    }
+
+    if (!force && this.loadedSessionRecordIds.has(normalizedSessionId) && this.hasRecordsForSession(normalizedSessionId)) {
+      return this.getRecordsBySession(normalizedSessionId);
+    }
+
+    const remoteRecords = await gasApiClient.request({
+      entity: "inventoryRecords",
+      action: "listBySession",
+      payload: {
+        storeId: this.storeId,
+        sessionId: normalizedSessionId
+      },
+      cacheable: false
+    });
+
+    if (Array.isArray(remoteRecords)) {
+      this.records = this.records.filter((record) => record.sessionId !== normalizedSessionId);
+      this.records.push(
+        ...remoteRecords
+          .filter((item) => item && (item.storeId === this.storeId || !item.storeId))
+          .map((item) => normalizeRecordLocation({ ...item, storeId: item.storeId ?? this.storeId }))
+      );
+      this.loadedSessionRecordIds.add(normalizedSessionId);
+      this.persistRecords();
+    }
+
+    return this.getRecordsBySession(normalizedSessionId);
   }
 
   getRecord(sessionId, productId, location) {
@@ -397,20 +441,12 @@ export class InventoryRepository {
 
   async pullFromGas() {
     try {
-      const [remoteSessions, remoteRecords] = await Promise.all([
-        gasApiClient.request({
-          entity: "inventorySessions",
-          action: "list",
-          payload: { storeId: this.storeId },
-          cacheable: true
-        }),
-        gasApiClient.request({
-          entity: "inventoryRecords",
-          action: "list",
-          payload: { storeId: this.storeId },
-          cacheable: true
-        })
-      ]);
+      const remoteSessions = await gasApiClient.request({
+        entity: "inventorySessions",
+        action: "list",
+        payload: { storeId: this.storeId },
+        cacheable: true
+      });
 
       if (Array.isArray(remoteSessions)) {
         this.sessions = remoteSessions
@@ -418,10 +454,8 @@ export class InventoryRepository {
           .map((item) => normalizeSession(item, this.storeId));
       }
 
-      if (Array.isArray(remoteRecords)) {
-        this.records = remoteRecords
-          .filter((item) => item && (item.storeId === this.storeId || !item.storeId))
-          .map((item) => normalizeRecordLocation({ ...item, storeId: item.storeId ?? this.storeId }));
+      if (this.activeSessionId) {
+        await this.loadRecordsBySessionId(this.activeSessionId, { force: true });
       }
     } catch (error) {
       this.lastSyncError = error instanceof Error ? error.message : "inventory pull failed";

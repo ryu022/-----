@@ -1,5 +1,6 @@
 import { createPrimaryButton, createSectionCard, createTabBar } from "../components/ui.js";
 import { PRODUCT_CATEGORIES } from "../config/productMasterConstants.js";
+import { ROUTES } from "../config/constants.js";
 import { inventoryService } from "../services/inventoryService.js";
 import { summaryService } from "../services/summaryService.js";
 
@@ -30,7 +31,7 @@ const makeDraftMap = (rows) => {
   return map;
 };
 
-export const renderPastInventoryPage = () => {
+export const renderPastInventoryPage = ({ navigate }) => {
   const page = document.createElement("div");
   page.className = "page-stack";
 
@@ -39,6 +40,8 @@ export const renderPastInventoryPage = () => {
   let activeCategory = PRODUCT_CATEGORIES[0];
   let isEditMode = false;
   let draftMap = new Map();
+  let isLoadingDetail = false;
+  let detailErrorMessage = "";
 
   const rerender = () => {
     page.innerHTML = "";
@@ -77,6 +80,7 @@ export const renderPastInventoryPage = () => {
           </div>
           <div><strong>棚卸日:</strong> ${session.inventoryDate || "-"}</div>
           <div><strong>店舗名:</strong> ${session.storeName || "-"}</div>
+          <div><strong>棚卸セッション:</strong> ${session.sessionId || "-"}</div>
           <div><strong>ステータス:</strong> ${session.status || "draft"}</div>
           <div><strong>完了日時:</strong> ${formatDateTime(session.completedAt)}</div>
         `;
@@ -84,7 +88,7 @@ export const renderPastInventoryPage = () => {
       });
     }
 
-    list.addEventListener("click", (event) => {
+    list.addEventListener("click", async (event) => {
       const button = event.target.closest("button[data-open-session]");
       if (!button) {
         return;
@@ -93,6 +97,17 @@ export const renderPastInventoryPage = () => {
       selectedSessionId = button.dataset.openSession;
       isEditMode = false;
       draftMap = new Map();
+      detailErrorMessage = "";
+      isLoadingDetail = true;
+      rerender();
+
+      const result = await inventoryService.loadSessionRecordsForView(selectedSessionId, { force: true });
+      isLoadingDetail = false;
+
+      if (!result.success) {
+        detailErrorMessage = result.error || "棚卸データの取得に失敗しました。";
+      }
+
       rerender();
     });
 
@@ -145,6 +160,13 @@ export const renderPastInventoryPage = () => {
     const wrap = document.createElement("div");
     wrap.className = "page-stack";
 
+    if (isLoadingDetail) {
+      const loading = document.createElement("div");
+      loading.className = "page-stack";
+      loading.innerHTML = '<p class="panel-card__text">過去棚卸データを読み込み中です...</p>';
+      return createSectionCard({ title: "過去の棚卸詳細", body: loading });
+    }
+
     if (!session) {
       const fallback = document.createElement("div");
       fallback.className = "page-stack";
@@ -158,6 +180,13 @@ export const renderPastInventoryPage = () => {
       });
       fallback.appendChild(back);
       return createSectionCard({ title: "過去の棚卸", body: fallback });
+    }
+
+    if (detailErrorMessage) {
+      const errorNode = document.createElement("p");
+      errorNode.className = "panel-card__text";
+      errorNode.textContent = `読み込みエラー: ${detailErrorMessage}`;
+      wrap.appendChild(errorNode);
     }
 
     const rows = summaryService.getRowsByCategory(activeCategory, sessionId);
@@ -183,6 +212,16 @@ export const renderPastInventoryPage = () => {
       rerender();
     });
     controls.appendChild(backButton);
+
+    const printButton = document.createElement("button");
+    printButton.type = "button";
+    printButton.className = "secondary-button";
+    printButton.textContent = "印刷";
+    printButton.addEventListener("click", () => {
+      inventoryService.setPrintSessionId(sessionId);
+      navigate(ROUTES.PRINT);
+    });
+    controls.appendChild(printButton);
 
     if (!isEditMode) {
       const editButton = document.createElement("button");

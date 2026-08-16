@@ -90,10 +90,12 @@ function handleRequest_(e, isGet) {
     console.error("[REQUEST_ERROR]", details);
     Logger.log("[REQUEST_ERROR] " + JSON.stringify(details));
 
+    const errorCode = String((error && error.code) ? error.code : "GAS_ERROR");
+
     return jsonResponse_({
       success: false,
       error: {
-        code: "GAS_ERROR",
+        code: errorCode,
         message: message,
         stack: stack
       }
@@ -260,15 +262,10 @@ function handleInventorySessions_(action, payload, storeId) {
   };
 
   const sessionSheet = getSheet_(SHEETS.INVENTORY_SESSIONS);
-  completeTrace("sessionSheet obtained", { sheetName: sessionSheet.getName() });
-
   const recordSheet = getSheet_(SHEETS.INVENTORY);
-  completeTrace("recordSheet obtained", { sheetName: recordSheet.getName() });
 
   const rawStoreId = extractStoreIdFromPayload_(payload, storeId);
   const targetStoreId = normalizeStoreId_(storeId || (payload && payload.storeId) || "");
-
-  completeTrace("storeId resolved", { rawStoreId: rawStoreId, targetStoreId: targetStoreId });
 
   if (action === "list") {
     const sessionRows = filterRowsByStoreId_(readRows_(sessionSheet), targetStoreId);
@@ -279,88 +276,124 @@ function handleInventorySessions_(action, payload, storeId) {
   }
 
   if (action === "upsert" || action === "complete") {
-    if (action === "complete") {
-      completeTrace("storeId validate start");
-      requireStoreId_(rawStoreId, "inventorySessions", action);
-      completeTrace("storeId validated");
-    }
+    try {
+      if (action === "complete") {
+        const sessionHeader = HEADERS[sessionSheet.getName()];
+        const recordHeader = HEADERS[recordSheet.getName()];
+        const sessionExistingHeader = sessionHeader
+          ? sessionSheet.getRange(1, 1, 1, sessionHeader.length).getValues()[0]
+          : [];
+        const recordExistingHeader = recordHeader
+          ? recordSheet.getRange(1, 1, 1, recordHeader.length).getValues()[0]
+          : [];
+        const isSessionHeaderValid = Boolean(sessionHeader) && sessionHeader.every(function (col, index) {
+          return sessionExistingHeader[index] === col;
+        });
+        const isRecordHeaderValid = Boolean(recordHeader) && recordHeader.every(function (col, index) {
+          return recordExistingHeader[index] === col;
+        });
 
-    const item = sanitizeSession_(payload.item || payload, targetStoreId);
+        completeTrace("start", { rawStoreId: rawStoreId, targetStoreId: targetStoreId });
+        completeTrace("sessionSheet", {
+          sheetName: sessionSheet.getName(),
+          headerDefined: Boolean(sessionHeader),
+          headerValid: isSessionHeaderValid,
+          expectedHeader: sessionHeader || [],
+          existingHeader: sessionExistingHeader
+        });
+        completeTrace("recordSheet", {
+          sheetName: recordSheet.getName(),
+          headerDefined: Boolean(recordHeader),
+          headerValid: isRecordHeaderValid,
+          expectedHeader: recordHeader || [],
+          existingHeader: recordExistingHeader
+        });
 
-    if (action === "complete") {
-      completeTrace("session payload sanitized", {
+        requireStoreId_(rawStoreId, "inventorySessions", action);
+        completeTrace("storeId validated", { rawStoreId: rawStoreId, targetStoreId: targetStoreId });
+      }
+
+      const item = sanitizeSession_(payload.item || payload, targetStoreId);
+
+      if (action === "complete" && !item.sessionId) {
+        throw new Error("sessionId is required for inventorySessions complete");
+      }
+
+      if (action === "complete") {
+        completeTrace("sessionId validated", { sessionId: item.sessionId });
+        item.status = "completed";
+        item.completedAt = item.completedAt || new Date().toISOString();
+      }
+
+      item.updatedAt = new Date().toISOString();
+      if (action === "complete") {
+        completeTrace("session update start", { keyName: "sessionId", keyValue: item.sessionId });
+      }
+      upsertByKey_(sessionSheet, "sessionId", item, targetStoreId, {
+        flow: action === "complete" ? "COMPLETE:SESSION" : "UPSERT:SESSION",
+        entity: "inventorySessions",
+        action: action,
+        keyName: "sessionId",
+        keyValue: item.sessionId,
+        targetStoreId: targetStoreId
+      });
+      if (action === "complete") {
+        completeTrace("session update complete", { keyName: "sessionId", keyValue: item.sessionId });
+      }
+
+      const sessionRow = {
+        recordId: "SESSION:" + item.sessionId,
+        storeId: item.storeId,
         sessionId: item.sessionId,
-        status: item.status,
-        completedAt: item.completedAt,
-        completedBy: item.completedBy
+        storeName: item.storeName,
+        inventoryDate: item.inventoryDate,
+        productId: "",
+        location: "__SESSION__",
+        quantity: "",
+        updatedAt: new Date().toISOString(),
+        updatedBy: item.updatedBy || ""
+      };
+      if (action === "complete") {
+        completeTrace("legacy update start", { keyName: "recordId", keyValue: sessionRow.recordId });
+      }
+      upsertByKey_(recordSheet, "recordId", sessionRow, targetStoreId, {
+        flow: action === "complete" ? "COMPLETE:LEGACY_SESSION_ROW" : "UPSERT:LEGACY_SESSION_ROW",
+        entity: "inventorySessions",
+        action: action,
+        keyName: "recordId",
+        keyValue: sessionRow.recordId,
+        targetStoreId: targetStoreId
       });
-    }
+      if (action === "complete") {
+        completeTrace("legacy update complete", { keyName: "recordId", keyValue: sessionRow.recordId });
+        completeTrace("finished", { sessionId: item.sessionId, storeId: targetStoreId });
+      }
 
-    if (action === "complete" && !item.sessionId) {
-      throw new Error("sessionId is required for inventorySessions complete");
-    }
+      clearCache_("inventorySessions:list:{}");
+      clearCache_("inventoryRecords:list:{}");
+      return toSessionResponse_(item);
+    } catch (error) {
+      if (action === "complete") {
+        const message = String((error && error.message) ? error.message : error || "");
+        const stack = String((error && error.stack) ? error.stack : "");
+        const detail = {
+          message: message,
+          stack: stack,
+          sessionId: String(payload && payload.item && payload.item.sessionId ? payload.item.sessionId : (payload && payload.sessionId ? payload.sessionId : "")),
+          storeId: targetStoreId
+        };
 
-    if (action === "complete") {
-      completeTrace("sessionId validated", { sessionId: item.sessionId });
-    }
+        console.error("[COMPLETE ERROR]", detail);
+        Logger.log("[COMPLETE ERROR] " + JSON.stringify(detail));
 
-    if (action === "complete") {
-      item.status = "completed";
-      item.completedAt = item.completedAt || new Date().toISOString();
-      completeTrace("status/completedAt applied", {
-        status: item.status,
-        completedAt: item.completedAt,
-        completedBy: item.completedBy
-      });
-    }
+        const completeError = new Error(message || "inventorySessions complete failed");
+        completeError.code = "COMPLETE_ERROR";
+        completeError.stack = stack || completeError.stack;
+        throw completeError;
+      }
 
-    item.updatedAt = new Date().toISOString();
-    if (action === "complete") {
-      completeTrace("session update start", { keyName: "sessionId" });
+      throw error;
     }
-    upsertByKey_(sessionSheet, "sessionId", item, targetStoreId, {
-      flow: action === "complete" ? "COMPLETE:SESSION" : "UPSERT:SESSION",
-      entity: "inventorySessions",
-      action: action,
-      keyName: "sessionId",
-      keyValue: item.sessionId,
-      targetStoreId: targetStoreId
-    });
-    if (action === "complete") {
-      completeTrace("session update complete", { keyName: "sessionId", keyValue: item.sessionId });
-    }
-
-    const sessionRow = {
-      recordId: "SESSION:" + item.sessionId,
-      storeId: item.storeId,
-      sessionId: item.sessionId,
-      storeName: item.storeName,
-      inventoryDate: item.inventoryDate,
-      productId: "",
-      location: "__SESSION__",
-      quantity: "",
-      updatedAt: new Date().toISOString(),
-      updatedBy: item.updatedBy || ""
-    };
-    if (action === "complete") {
-      completeTrace("legacy session update start", { keyName: "recordId", keyValue: sessionRow.recordId });
-    }
-    upsertByKey_(recordSheet, "recordId", sessionRow, targetStoreId, {
-      flow: action === "complete" ? "COMPLETE:LEGACY_SESSION_ROW" : "UPSERT:LEGACY_SESSION_ROW",
-      entity: "inventorySessions",
-      action: action,
-      keyName: "recordId",
-      keyValue: sessionRow.recordId,
-      targetStoreId: targetStoreId
-    });
-    if (action === "complete") {
-      completeTrace("legacy session update complete", { keyName: "recordId", keyValue: sessionRow.recordId });
-      completeTrace("finished", { sessionId: item.sessionId, storeId: targetStoreId });
-    }
-
-    clearCache_("inventorySessions:list:{}");
-    clearCache_("inventoryRecords:list:{}");
-    return toSessionResponse_(item);
   }
 
   if (action === "delete") {
@@ -417,6 +450,23 @@ function handleInventoryRecords_(action, payload, storeId) {
   const sheet = getSheet_(SHEETS.INVENTORY);
   const rawStoreId = extractStoreIdFromPayload_(payload, storeId);
   const targetStoreId = normalizeStoreId_(storeId || (payload && payload.storeId) || "");
+
+  if (action === "listBySession") {
+    requireStoreId_(rawStoreId, "inventoryRecords", action);
+
+    const sessionId = String(payload.sessionId || "").trim();
+    if (!sessionId) {
+      throw new Error("sessionId is required for inventoryRecords listBySession");
+    }
+
+    return filterRowsByStoreId_(readRows_(sheet), targetStoreId)
+      .filter(function (row) {
+        return row.location !== "__SESSION__" && String(row.sessionId || "") === sessionId;
+      })
+      .map(function (row) {
+        return toRecordResponse_(row);
+      });
+  }
 
   if (action === "list" || action === "getInventory") {
     return filterRowsByStoreId_(readRows_(sheet), targetStoreId).filter(function (row) {

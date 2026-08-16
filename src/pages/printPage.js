@@ -20,10 +20,8 @@ const formatNumber = (value) => {
 
 const formatCurrency = (value) => `${Number(value).toLocaleString("ja-JP", { maximumFractionDigits: 0 })}円`;
 
-const buildRows = () => {
-  const session = inventoryService.getActiveSession();
-
-  return CATEGORIES.flatMap((category) => summaryService.getRowsByCategory(category, session?.sessionId));
+const buildRows = (sessionId) => {
+  return CATEGORIES.flatMap((category) => summaryService.getRowsByCategory(category, sessionId));
 };
 
 const buildTotals = (rows) => {
@@ -158,10 +156,10 @@ const exportExcel = (rows, storeName, inventoryDate) => {
 export const renderPrintPage = () => {
   const page = document.createElement("div");
   page.className = "page-stack";
-  const session = inventoryService.getActiveSession();
+  const session = inventoryService.consumePrintSession();
   const storeName = session?.storeName ?? "未開始";
   const inventoryDate = session?.inventoryDate ?? "未開始";
-  const rows = buildRows();
+  const rows = buildRows(session?.sessionId);
   const printData = buildPrintData(rows, storeName, inventoryDate);
 
   const actions = document.createElement("div");

@@ -20,6 +20,7 @@ const EDITABLE_LOCATION_KEYS_BY_CATEGORY = {
 class InventoryService {
   constructor() {
     this.repository = new InventoryRepository();
+    this.printSessionId = "";
   }
 
   async initialize() {
@@ -40,6 +41,38 @@ class InventoryService {
 
   getSessionById(sessionId) {
     return this.repository.getSessionById(sessionId);
+  }
+
+  async loadSessionRecordsForView(sessionId, { force = true } = {}) {
+    const session = this.repository.getSessionById(sessionId);
+    if (!session) {
+      return { success: false, error: "棚卸セッションが見つかりません。" };
+    }
+
+    try {
+      await this.repository.loadRecordsBySessionId(sessionId, { force });
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "棚卸データの取得に失敗しました。"
+      };
+    }
+  }
+
+  setPrintSessionId(sessionId) {
+    this.printSessionId = String(sessionId || "").trim();
+  }
+
+  consumePrintSession() {
+    const sessionId = this.printSessionId;
+    this.printSessionId = "";
+
+    if (!sessionId) {
+      return this.repository.getActiveSession();
+    }
+
+    return this.repository.getSessionById(sessionId) || null;
   }
 
   // 既存画面の互換維持: 商品マスター一覧を取得する。
