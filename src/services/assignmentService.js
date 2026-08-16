@@ -71,7 +71,7 @@ class AssignmentService {
       });
   }
 
-  updateAssignment(productId, patch) {
+  async updateAssignment(productId, patch) {
     const validation = assignmentValidator.validatePatch(patch);
     if (!validation.isValid) {
       return { success: false, errors: validation.errors };
@@ -98,16 +98,16 @@ class AssignmentService {
       }
     });
 
-    const updated = this.repository.updateByProductId(productId, next);
-    if (!updated) {
-      return { success: false, errors: { common: "更新に失敗しました。" } };
+    const result = await this.repository.updateByProductId(productId, next);
+    if (!result || !result.success) {
+      return { success: false, errors: { common: result?.error || "更新に失敗しました。" } };
     }
 
     this.repository.setAll(this.normalizeOrders(this.repository.getAll()));
     return { success: true };
   }
 
-  reorderArea(areaKey, orderedProductIds) {
+  async reorderArea(areaKey, orderedProductIds) {
     const orderKey = ORDER_KEY_BY_AREA[areaKey];
     const all = this.repository.getAll();
     const map = new Map(all.map((item) => [item.productId, item]));
@@ -122,6 +122,7 @@ class AssignmentService {
     });
 
     this.repository.setAll(this.normalizeOrders(Array.from(map.values())));
+    return { success: true };
   }
 
   normalizeOrders(assignments) {

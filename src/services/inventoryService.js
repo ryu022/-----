@@ -3,6 +3,7 @@ import { productService } from "./productService.js";
 import { InventoryRepository } from "../repositories/inventoryRepository.js";
 import { InventorySessionModel } from "../models/inventorySessionModel.js";
 import { InventoryRecordModel } from "../models/inventoryRecordModel.js";
+import { setRuntimeStoreContext } from "../config/runtimeConfig.js";
 
 export const LOCATION_TABS = [
   { label: "売場", key: "salesFloor" },
@@ -28,7 +29,7 @@ class InventoryService {
     return productService.listProducts();
   }
 
-  startSession({ storeName, inventoryDate }) {
+  async startSession({ storeName, inventoryDate }) {
     const errors = {};
     const normalizedStoreName = storeName?.trim() ?? "";
     const normalizedInventoryDate = inventoryDate?.trim() ?? "";
@@ -45,16 +46,25 @@ class InventoryService {
       return { success: false, errors };
     }
 
+    const storeId = setRuntimeStoreContext({ storeName: normalizedStoreName });
+    this.repository.setStoreId(storeId);
+    productService.repository.setStoreId(storeId);
+    assignmentService.repository.setStoreId(storeId);
+
     const existing = this.repository.findSessionByStoreDate(normalizedStoreName, normalizedInventoryDate);
     const session = existing
-      ? new InventorySessionModel(existing)
+      ? new InventorySessionModel({ ...existing, storeId })
       : InventorySessionModel.create({
           sessionId: this.repository.nextSessionId(),
+          storeId,
           storeName: normalizedStoreName,
           inventoryDate: normalizedInventoryDate
         });
 
-    this.repository.saveSession(session);
+    const result = await this.repository.saveSession(session);
+    if (!result.success) {
+      return { success: false, error: result.error, session };
+    }
     return { success: true, session };
   }
 
@@ -91,7 +101,7 @@ class InventoryService {
     return record ? record.quantity : 0;
   }
 
-  saveQuantity({ productId, locationKey, quantity }) {
+  async saveQuantity({ productId, locationKey, quantity }) {
     const session = this.repository.getActiveSession();
     if (!session) {
       return { success: false, error: "棚卸セッションが開始されていません。" };
@@ -116,7 +126,10 @@ class InventoryService {
           quantity: numericQuantity
         });
 
-    const result = this.repository.upsertRecord(record);
+    const result = await this.repository.upsertRecord(record);
+    if (!result.success) {
+      return { success: false, error: result.error, changed: false };
+    }
     return { success: true, changed: result.changed };
   }
 }

@@ -42,7 +42,7 @@ class ProductService {
     return this.repository.getById(id);
   }
 
-  createProduct(rawInput) {
+  async createProduct(rawInput) {
     const validation = productValidator.validateRequired(rawInput);
     if (!validation.isValid) {
       return { success: false, errors: validation.errors };
@@ -54,27 +54,34 @@ class ProductService {
       ...payload
     });
 
-    const created = this.repository.add(model);
-    return { success: true, product: created };
+    const result = await this.repository.addWithSync(model);
+    if (!result.success) {
+      return {
+        success: false,
+        errors: { common: result.error }
+      };
+    }
+
+    return { success: true, product: result.product };
   }
 
-  updateProduct(id, rawInput) {
+  async updateProduct(id, rawInput) {
     const validation = productValidator.validateRequired(rawInput);
     if (!validation.isValid) {
       return { success: false, errors: validation.errors };
     }
 
     const payload = ProductModel.fromForm(rawInput);
-    const updated = this.repository.update(id, payload);
+    const result = await this.repository.updateWithSync(id, payload);
 
-    if (!updated) {
+    if (!result.success) {
       return {
         success: false,
-        errors: { common: "対象商品が見つかりませんでした。" }
+        errors: { common: result.error || "対象商品が見つかりませんでした。" }
       };
     }
 
-    return { success: true, product: updated };
+    return { success: true, product: result.product };
   }
 
   deleteProduct(id) {

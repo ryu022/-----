@@ -62,22 +62,29 @@ export class InventoryController {
       });
     };
 
-    form.addEventListener("submit", (event) => {
+    form.addEventListener("submit", async (event) => {
       event.preventDefault();
       clearErrors();
 
-      const result = inventoryService.startSession({
+      const result = await inventoryService.startSession({
         storeName: form.querySelector("#storeName").value,
         inventoryDate: form.querySelector("#inventoryDate").value
       });
 
       if (!result.success) {
-        Object.entries(result.errors).forEach(([key, message]) => {
-          const node = form.querySelector(`[data-error=\"${key}\"]`);
+        if (result.errors) {
+          Object.entries(result.errors).forEach(([key, message]) => {
+            const node = form.querySelector(`[data-error=\"${key}\"]`);
+            if (node) {
+              node.textContent = message;
+            }
+          });
+        } else if (result.error) {
+          const node = form.querySelector('[data-error="storeName"]');
           if (node) {
-            node.textContent = message;
+            node.textContent = result.error;
           }
-        });
+        }
         return;
       }
 
@@ -215,14 +222,14 @@ export class InventoryController {
         saveState.textContent = "保存状態: 保存中...";
       }
 
-      const timerId = window.setTimeout(() => {
-        const result = inventoryService.saveQuantity({ productId, locationKey, quantity });
+      const timerId = window.setTimeout(async () => {
+        const result = await inventoryService.saveQuantity({ productId, locationKey, quantity });
         if (saveState) {
           saveState.textContent = result.success
             ? result.changed
               ? "保存状態: 保存済み"
               : "保存状態: 変更なし"
-            : "保存状態: 入力エラー";
+            : result.error || "保存状態: 入力エラー";
         }
         this.saveTimers.delete(timerKey);
       }, 120);

@@ -1,8 +1,10 @@
 import { gasApiClient } from "./gasApiClient.js";
+import { getRuntimeStoreId } from "../config/runtimeConfig.js";
 
-const STORAGE_KEY = "inventory-app-assignments-v1";
+const STORAGE_KEY_PREFIX = "inventory-app-assignments-v1";
 
 const clone = (value) => structuredClone(value);
+const getStorageKey = (storeId) => `${STORAGE_KEY_PREFIX}:${storeId || "default"}`;
 
 const FALLBACK_SEED = [
   {
@@ -25,11 +27,13 @@ const toMap = (assignments) => new Map(assignments.map((item) => [item.productId
 export class AssignmentRepository {
   constructor() {
     this.assignments = [];
+    this.storeId = getRuntimeStoreId();
     this.lastSyncError = "";
   }
 
   async initialize() {
-    const local = window.localStorage.getItem(STORAGE_KEY);
+    this.setStoreId(getRuntimeStoreId());
+    const local = window.localStorage.getItem(getStorageKey(this.storeId));
 
     if (local) {
       this.assignments = JSON.parse(local);
@@ -51,6 +55,16 @@ export class AssignmentRepository {
     }
   }
 
+  setStoreId(storeId) {
+    const nextStoreId = storeId || getRuntimeStoreId() || "default";
+    this.storeId = nextStoreId;
+
+    const local = window.localStorage.getItem(getStorageKey(this.storeId));
+    if (local) {
+      this.assignments = JSON.parse(local);
+    }
+  }
+
   getAll() {
     return clone(this.assignments);
   }
@@ -61,12 +75,12 @@ export class AssignmentRepository {
 
   setAll(nextAssignments) {
     const previous = this.assignments;
-    this.assignments = clone(nextAssignments);
+    this.assignments = clone(nextAssignments).map((item) => ({ ...item, storeId: this.storeId }));
     this.persist();
     this.pushDiff(previous, this.assignments);
   }
 
-  updateByProductId(productId, patch) {
+  async updateByProductId(productId, patch) {
     const index = this.assignments.findIndex((item) => item.productId === productId);
     if (index < 0) {
       return null;
@@ -75,17 +89,28 @@ export class AssignmentRepository {
     this.assignments[index] = {
       ...this.assignments[index],
       ...patch,
+      storeId: this.storeId,
       updatedAt: new Date().toISOString()
     };
 
     this.persist();
-    this.pushUpsert(this.assignments[index]);
-    return clone(this.assignments[index]);
+
+    try {
+      await this.syncUpsert(this.assignments[index]);
+      return { success: true, assignment: clone(this.assignments[index]) };
+    } catch (error) {
+      this.lastSyncError = error instanceof Error ? error.message : "assignment upsert failed";
+      return {
+        success: false,
+        error: "Googleスプレッドシートへの保存に失敗しました。",
+        assignment: clone(this.assignments[index])
+      };
+    }
   }
 
   nextAssignmentId() {
     const max = this.assignments.reduce((acc, item) => {
-      const numeric = Number(item.assignmentId.replace(/^A/, ""));
+      const numeric = Number(String(item.assignmentId).replace(/^A/, ""));
       return Number.isFinite(numeric) ? Math.max(acc, numeric) : acc;
     }, 0);
 
@@ -93,7 +118,7 @@ export class AssignmentRepository {
   }
 
   persist() {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(this.assignments));
+    window.localStorage.setItem(getStorageKey(this.storeId), JSON.stringify(this.assignments));
   }
 
   async pullFromGas() {
@@ -101,18 +126,22 @@ export class AssignmentRepository {
       const remoteAssignments = await gasApiClient.request({
         entity: "assignments",
         action: "list",
-        payload: {},
+        payload: { storeId: this.storeId },
         cacheable: true
       });
 
-      if (Array.isArray(remoteAssignments) && remoteAssignments.length > 0) {
-        this.assignments = remoteAssignments;
+      const normalized = (Array.isArray(remoteAssignments) ? remoteAssignments : [])
+        .filter((item) => item && (item.storeId === this.storeId || !item.storeId))
+        .map((item) => ({ ...item, storeId: item.storeId ?? this.storeId }));
+
+      if (normalized.length > 0) {
+        this.assignments = normalized;
         this.persist();
       } else if (this.assignments.length > 0) {
         await gasApiClient.request({
           entity: "assignments",
           action: "bulkUpsert",
-          payload: { items: this.assignments }
+          payload: { items: this.assignments.map((item) => ({ ...item, storeId: this.storeId })) }
         });
       }
     } catch (error) {
@@ -144,26 +173,22 @@ export class AssignmentRepository {
       .request({
         entity: "assignments",
         action: "bulkUpsert",
-        payload: { items: changed }
+        payload: { items: changed.map((item) => ({ ...item, storeId: this.storeId })) }
       })
       .catch((error) => {
         this.lastSyncError = error instanceof Error ? error.message : "assignment diff sync failed";
       });
   }
 
-  pushUpsert(item) {
+  async syncUpsert(item) {
     if (!gasApiClient.isEnabled()) {
       return;
     }
 
-    void gasApiClient
-      .request({
-        entity: "assignments",
-        action: "upsert",
-        payload: { item }
-      })
-      .catch((error) => {
-        this.lastSyncError = error instanceof Error ? error.message : "assignment upsert failed";
-      });
+    await gasApiClient.request({
+      entity: "assignments",
+      action: "upsert",
+      payload: { item: { ...item, storeId: this.storeId } }
+    });
   }
 }

@@ -68,8 +68,12 @@ export class AssignmentController {
       const targetInput = this.createCheckbox({
         label: "棚卸対象",
         checked: assignment.isTarget,
-        onChange: (checked) => {
-          assignmentService.updateAssignment(product.id, { isTarget: checked });
+        onChange: async (checked) => {
+          const result = await assignmentService.updateAssignment(product.id, { isTarget: checked });
+          if (!result.success) {
+            window.alert(result.errors?.common || "Googleスプレッドシートへの保存に失敗しました。");
+            return;
+          }
           rerender();
         }
       });
@@ -78,8 +82,12 @@ export class AssignmentController {
         label: "売場",
         checked: assignment.salesFloor,
         disabled: !assignment.isTarget,
-        onChange: (checked) => {
-          assignmentService.updateAssignment(product.id, { salesFloor: checked });
+        onChange: async (checked) => {
+          const result = await assignmentService.updateAssignment(product.id, { salesFloor: checked });
+          if (!result.success) {
+            window.alert(result.errors?.common || "Googleスプレッドシートへの保存に失敗しました。");
+            return;
+          }
           rerender();
         }
       });
@@ -88,8 +96,12 @@ export class AssignmentController {
         label: "バックヤード",
         checked: assignment.backyard,
         disabled: !assignment.isTarget,
-        onChange: (checked) => {
-          assignmentService.updateAssignment(product.id, { backyard: checked });
+        onChange: async (checked) => {
+          const result = await assignmentService.updateAssignment(product.id, { backyard: checked });
+          if (!result.success) {
+            window.alert(result.errors?.common || "Googleスプレッドシートへの保存に失敗しました。");
+            return;
+          }
           rerender();
         }
       });
@@ -98,8 +110,12 @@ export class AssignmentController {
         label: "資材",
         checked: assignment.materials,
         disabled: !assignment.isTarget,
-        onChange: (checked) => {
-          assignmentService.updateAssignment(product.id, { materials: checked });
+        onChange: async (checked) => {
+          const result = await assignmentService.updateAssignment(product.id, { materials: checked });
+          if (!result.success) {
+            window.alert(result.errors?.common || "Googleスプレッドシートへの保存に失敗しました。");
+            return;
+          }
           rerender();
         }
       });
@@ -168,9 +184,13 @@ export class AssignmentController {
       dragList.appendChild(item);
     });
 
-    this.bindPointerSort(dragList, () => {
+    this.bindPointerSort(dragList, async () => {
       const orderedIds = Array.from(dragList.querySelectorAll(".assignment-order-item")).map((item) => item.dataset.productId);
-      assignmentService.reorderArea(this.activeMode, orderedIds);
+      const result = await assignmentService.reorderArea(this.activeMode, orderedIds);
+      if (!result.success) {
+        window.alert(result.errors?.common || "Googleスプレッドシートへの保存に失敗しました。");
+        return;
+      }
       rerender();
     });
 

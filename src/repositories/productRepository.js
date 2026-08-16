@@ -1,6 +1,7 @@
 import { gasApiClient } from "./gasApiClient.js";
+import { getRuntimeStoreId } from "../config/runtimeConfig.js";
 
-const STORAGE_KEY = "inventory-app-products-v1";
+const STORAGE_KEY_PREFIX = "inventory-app-products-v1";
 
 const FALLBACK_SEED = [
   { id: "P000001", name: "真あじ", standard: "kg", category: "鮮魚", cost: 280, supplier: "佐賀魚" },
@@ -11,20 +12,34 @@ const FALLBACK_SEED = [
 ];
 
 const clone = (value) => structuredClone(value);
+const getStorageKey = (storeId) => `${STORAGE_KEY_PREFIX}:${storeId || "default"}`;
 
 const sortById = (products) => {
-  products.sort((a, b) => a.id.localeCompare(b.id));
+  products.sort((a, b) => String(a.id ?? a.productId).localeCompare(String(b.id ?? b.productId)));
   return products;
+};
+
+const normalizeProduct = (item, storeId) => {
+  const productId = item?.productId ?? item?.id;
+  return {
+    ...item,
+    id: productId,
+    productId,
+    storeId: item?.storeId ?? storeId
+  };
 };
 
 export class ProductRepository {
   constructor() {
     this.products = [];
+    this.storeId = getRuntimeStoreId();
     this.lastSyncError = "";
   }
 
   async initialize() {
-    const local = window.localStorage.getItem(STORAGE_KEY);
+    this.setStoreId(getRuntimeStoreId());
+
+    const local = window.localStorage.getItem(getStorageKey(this.storeId));
 
     if (local) {
       this.products = JSON.parse(local);
@@ -34,15 +49,25 @@ export class ProductRepository {
         if (!response.ok) {
           throw new Error(`Failed to load seed: ${response.status}`);
         }
-        this.products = sortById(await response.json());
+        this.products = sortById((await response.json()).map((item) => normalizeProduct(item, this.storeId)));
       } catch {
-        this.products = sortById(clone(FALLBACK_SEED));
+        this.products = sortById(clone(FALLBACK_SEED).map((item) => normalizeProduct(item, this.storeId)));
       }
       this.persist();
     }
 
     if (gasApiClient.isEnabled()) {
       await this.pullFromGas();
+    }
+  }
+
+  setStoreId(storeId) {
+    const nextStoreId = storeId || getRuntimeStoreId() || "default";
+    this.storeId = nextStoreId;
+
+    const local = window.localStorage.getItem(getStorageKey(this.storeId));
+    if (local) {
+      this.products = JSON.parse(local);
     }
   }
 
@@ -55,14 +80,34 @@ export class ProductRepository {
   }
 
   add(product) {
-    this.products.push(product);
+    const normalized = normalizeProduct(product, this.storeId);
+    this.products.push(normalized);
     sortById(this.products);
     this.persist();
-    this.pushChange("upsert", product);
-    return clone(product);
+    this.pushChange("upsert", normalized);
+    return clone(normalized);
   }
 
-  update(id, nextValues) {
+  async addWithSync(product) {
+    const normalized = normalizeProduct(product, this.storeId);
+    this.products.push(normalized);
+    sortById(this.products);
+    this.persist();
+
+    try {
+      await this.syncChange("upsert", normalized);
+      return { success: true, product: clone(normalized) };
+    } catch (error) {
+      this.lastSyncError = error instanceof Error ? error.message : "product sync failed";
+      return {
+        success: false,
+        error: "Googleスプレッドシートへの保存に失敗しました。",
+        product: clone(normalized)
+      };
+    }
+  }
+
+  async updateWithSync(id, nextValues) {
     const index = this.products.findIndex((product) => product.id === id);
     if (index < 0) {
       return null;
@@ -71,12 +116,24 @@ export class ProductRepository {
     this.products[index] = {
       ...this.products[index],
       ...nextValues,
-      id: this.products[index].id
+      id: this.products[index].id,
+      productId: this.products[index].id,
+      storeId: this.storeId
     };
 
     this.persist();
-    this.pushChange("upsert", this.products[index]);
-    return clone(this.products[index]);
+
+    try {
+      await this.syncChange("upsert", this.products[index]);
+      return { success: true, product: clone(this.products[index]) };
+    } catch (error) {
+      this.lastSyncError = error instanceof Error ? error.message : "product sync failed";
+      return {
+        success: false,
+        error: "Googleスプレッドシートへの保存に失敗しました。",
+        product: clone(this.products[index])
+      };
+    }
   }
 
   remove(id) {
@@ -94,7 +151,7 @@ export class ProductRepository {
 
   nextId() {
     const max = this.products.reduce((acc, item) => {
-      const numeric = Number(item.id.replace(/^P/, ""));
+      const numeric = Number(String(item.id ?? item.productId).replace(/^P/, ""));
       return Number.isFinite(numeric) ? Math.max(acc, numeric) : acc;
     }, 0);
 
@@ -102,7 +159,7 @@ export class ProductRepository {
   }
 
   persist() {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(this.products));
+    window.localStorage.setItem(getStorageKey(this.storeId), JSON.stringify(this.products));
   }
 
   async pullFromGas() {
@@ -110,18 +167,22 @@ export class ProductRepository {
       const remoteProducts = await gasApiClient.request({
         entity: "products",
         action: "list",
-        payload: {},
+        payload: { storeId: this.storeId },
         cacheable: true
       });
 
-      if (Array.isArray(remoteProducts) && remoteProducts.length > 0) {
-        this.products = sortById(remoteProducts);
+      const normalized = (Array.isArray(remoteProducts) ? remoteProducts : [])
+        .filter((item) => item && (item.storeId === this.storeId || !item.storeId))
+        .map((item) => normalizeProduct(item, this.storeId));
+
+      if (normalized.length > 0) {
+        this.products = sortById(normalized);
         this.persist();
       } else if (this.products.length > 0) {
         await gasApiClient.request({
           entity: "products",
           action: "bulkUpsert",
-          payload: { items: this.products }
+          payload: { items: this.products.map((item) => normalizeProduct(item, this.storeId)) }
         });
       }
     } catch (error) {
@@ -138,12 +199,14 @@ export class ProductRepository {
   }
 
   async syncChange(action, product) {
+    const normalized = normalizeProduct(product, this.storeId);
+
     try {
       if (action === "delete") {
         await gasApiClient.request({
           entity: "products",
           action: "delete",
-          payload: { id: product.id }
+          payload: { id: normalized.id, storeId: this.storeId }
         });
         return;
       }
@@ -151,7 +214,7 @@ export class ProductRepository {
       await gasApiClient.request({
         entity: "products",
         action: "upsert",
-        payload: { item: product }
+        payload: { item: normalized }
       });
     } catch (error) {
       this.lastSyncError = error instanceof Error ? error.message : "product sync failed";

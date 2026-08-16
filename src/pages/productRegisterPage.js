@@ -89,7 +89,7 @@ export const renderProductRegisterPage = ({ navigate } = {}) => {
     clearErrors();
   };
 
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
     clearErrors();
     message.hidden = true;
@@ -103,8 +103,8 @@ export const renderProductRegisterPage = ({ navigate } = {}) => {
     };
 
     const result = isEditing
-      ? productService.updateProduct(editingProduct.id, input)
-      : productService.createProduct(input);
+      ? await productService.updateProduct(editingProduct.id, input)
+      : await productService.createProduct(input);
 
     if (!result.success) {
       showErrors(result.errors);

@@ -95,10 +95,12 @@ export class GasApiClient {
       const response = await fetch(this.endpoint, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": runtimeConfig.requestContentType,
+          Accept: "application/json"
         },
         body: JSON.stringify({ entity, action, payload }),
-        signal: controller.signal
+        signal: controller.signal,
+        mode: "cors"
       });
 
       if (!response.ok) {
@@ -113,13 +115,15 @@ export class GasApiClient {
       window.dispatchEvent(new CustomEvent("repo:network", { detail: { status: "success", entity, action } }));
       return json.data;
     } catch (error) {
+      const message = error instanceof Error ? error.message : "通信に失敗しました。もう一度お試しください。";
+      console.error("GAS request failed", { entity, action, message, error });
       window.dispatchEvent(
         new CustomEvent("repo:network", {
           detail: {
             status: "error",
             entity,
             action,
-            message: error instanceof Error ? error.message : "通信エラー"
+            message
           }
         })
       );

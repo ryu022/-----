@@ -1,23 +1,30 @@
 import { gasApiClient } from "./gasApiClient.js";
+import { getRuntimeStoreId } from "../config/runtimeConfig.js";
 
-const SESSION_STORAGE_KEY = "inventory-app-sessions-v1";
-const RECORD_STORAGE_KEY = "inventory-app-records-v1";
-const ACTIVE_SESSION_STORAGE_KEY = "inventory-app-active-session-v1";
+const SESSION_STORAGE_KEY_PREFIX = "inventory-app-sessions-v1";
+const RECORD_STORAGE_KEY_PREFIX = "inventory-app-records-v1";
+const ACTIVE_SESSION_STORAGE_KEY_PREFIX = "inventory-app-active-session-v1";
 
 const clone = (value) => structuredClone(value);
+const getSessionStorageKey = (storeId) => `${SESSION_STORAGE_KEY_PREFIX}:${storeId || "default"}`;
+const getRecordStorageKey = (storeId) => `${RECORD_STORAGE_KEY_PREFIX}:${storeId || "default"}`;
+const getActiveSessionStorageKey = (storeId) => `${ACTIVE_SESSION_STORAGE_KEY_PREFIX}:${storeId || "default"}`;
 
 export class InventoryRepository {
   constructor() {
     this.sessions = [];
     this.records = [];
     this.activeSessionId = "";
+    this.storeId = getRuntimeStoreId();
     this.lastSyncError = "";
   }
 
   async initialize() {
-    const localSessions = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    const localRecords = window.localStorage.getItem(RECORD_STORAGE_KEY);
-    const localActiveSessionId = window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+    this.setStoreId(getRuntimeStoreId());
+
+    const localSessions = window.localStorage.getItem(getSessionStorageKey(this.storeId));
+    const localRecords = window.localStorage.getItem(getRecordStorageKey(this.storeId));
+    const localActiveSessionId = window.localStorage.getItem(getActiveSessionStorageKey(this.storeId));
 
     if (localSessions && localRecords) {
       this.sessions = JSON.parse(localSessions);
@@ -34,8 +41,8 @@ export class InventoryRepository {
           throw new Error("failed to fetch inventory seed");
         }
 
-        this.sessions = await sessionResponse.json();
-        this.records = await recordResponse.json();
+        this.sessions = (await sessionResponse.json()).map((item) => ({ ...item, storeId: item.storeId ?? this.storeId }));
+        this.records = (await recordResponse.json()).map((item) => ({ ...item, storeId: item.storeId ?? this.storeId }));
       } catch {
         this.sessions = [];
         this.records = [];
@@ -51,6 +58,25 @@ export class InventoryRepository {
     this.persistActiveSessionId();
   }
 
+  setStoreId(storeId) {
+    const nextStoreId = storeId || getRuntimeStoreId() || "default";
+    this.storeId = nextStoreId;
+
+    const localSessions = window.localStorage.getItem(getSessionStorageKey(this.storeId));
+    const localRecords = window.localStorage.getItem(getRecordStorageKey(this.storeId));
+    const localActiveSessionId = window.localStorage.getItem(getActiveSessionStorageKey(this.storeId));
+
+    if (localSessions && localRecords) {
+      this.sessions = JSON.parse(localSessions);
+      this.records = JSON.parse(localRecords);
+      this.activeSessionId = localActiveSessionId ?? "";
+    } else {
+      this.sessions = [];
+      this.records = [];
+      this.activeSessionId = "";
+    }
+  }
+
   getActiveSession() {
     if (!this.activeSessionId) {
       return null;
@@ -60,31 +86,44 @@ export class InventoryRepository {
   }
 
   findSessionByStoreDate(storeName, inventoryDate) {
-    return clone(this.sessions.find((item) => item.storeName === storeName && item.inventoryDate === inventoryDate));
+    return clone(
+      this.sessions.find(
+        (item) => item.storeId === this.storeId && item.storeName === storeName && item.inventoryDate === inventoryDate
+      )
+    );
   }
 
-  saveSession(session) {
-    const index = this.sessions.findIndex((item) => item.sessionId === session.sessionId);
+  async saveSession(session) {
+    const normalized = { ...clone(session), storeId: this.storeId };
+    const index = this.sessions.findIndex((item) => item.sessionId === normalized.sessionId);
     if (index >= 0) {
-      this.sessions[index] = clone(session);
+      this.sessions[index] = normalized;
     } else {
-      this.sessions.push(clone(session));
+      this.sessions.push(normalized);
     }
 
-    this.activeSessionId = session.sessionId;
+    this.activeSessionId = normalized.sessionId;
     this.persistSessions();
     this.persistActiveSessionId();
 
-    if (gasApiClient.isEnabled()) {
-      void gasApiClient
-        .request({
-          entity: "inventorySessions",
-          action: "upsert",
-          payload: { item: session }
-        })
-        .catch((error) => {
-          this.lastSyncError = error instanceof Error ? error.message : "session sync failed";
-        });
+    if (!gasApiClient.isEnabled()) {
+      return { success: true, session: normalized };
+    }
+
+    try {
+      await gasApiClient.request({
+        entity: "inventorySessions",
+        action: "upsert",
+        payload: { item: normalized }
+      });
+      return { success: true, session: normalized };
+    } catch (error) {
+      this.lastSyncError = error instanceof Error ? error.message : "session sync failed";
+      return {
+        success: false,
+        error: "Googleスプレッドシートへの保存に失敗しました。",
+        session: normalized
+      };
     }
   }
 
@@ -100,31 +139,32 @@ export class InventoryRepository {
     );
   }
 
-  upsertRecord(record) {
+  async upsertRecord(record) {
+    const normalized = { ...clone(record), storeId: this.storeId };
     const index = this.records.findIndex(
-      (item) => item.sessionId === record.sessionId && item.productId === record.productId && item.location === record.location
+      (item) => item.sessionId === normalized.sessionId && item.productId === normalized.productId && item.location === normalized.location
     );
 
     if (index < 0) {
-      this.records.push(clone(record));
+      this.records.push(normalized);
       this.persistRecords();
-      this.pushRecord(record);
-      return { changed: true };
+      const result = await this.pushRecord(normalized);
+      return { changed: true, ...result };
     }
 
-    if (this.records[index].quantity === record.quantity) {
-      return { changed: false };
+    if (this.records[index].quantity === normalized.quantity) {
+      return { changed: false, success: true };
     }
 
-    this.records[index] = clone(record);
+    this.records[index] = normalized;
     this.persistRecords();
-    this.pushRecord(record);
-    return { changed: true };
+    const result = await this.pushRecord(normalized);
+    return { changed: true, ...result };
   }
 
   nextSessionId() {
     const max = this.sessions.reduce((acc, item) => {
-      const numeric = Number(item.sessionId.replace(/^S/, ""));
+      const numeric = Number(String(item.sessionId).replace(/^S/, ""));
       return Number.isFinite(numeric) ? Math.max(acc, numeric) : acc;
     }, 0);
 
@@ -133,7 +173,7 @@ export class InventoryRepository {
 
   nextRecordId() {
     const max = this.records.reduce((acc, item) => {
-      const numeric = Number(item.recordId.replace(/^R/, ""));
+      const numeric = Number(String(item.recordId).replace(/^R/, ""));
       return Number.isFinite(numeric) ? Math.max(acc, numeric) : acc;
     }, 0);
 
@@ -141,15 +181,15 @@ export class InventoryRepository {
   }
 
   persistSessions() {
-    window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(this.sessions));
+    window.localStorage.setItem(getSessionStorageKey(this.storeId), JSON.stringify(this.sessions));
   }
 
   persistRecords() {
-    window.localStorage.setItem(RECORD_STORAGE_KEY, JSON.stringify(this.records));
+    window.localStorage.setItem(getRecordStorageKey(this.storeId), JSON.stringify(this.records));
   }
 
   persistActiveSessionId() {
-    window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, this.activeSessionId);
+    window.localStorage.setItem(getActiveSessionStorageKey(this.storeId), this.activeSessionId);
   }
 
   async pullFromGas() {
@@ -158,49 +198,59 @@ export class InventoryRepository {
         gasApiClient.request({
           entity: "inventorySessions",
           action: "list",
-          payload: {},
+          payload: { storeId: this.storeId },
           cacheable: true
         }),
         gasApiClient.request({
           entity: "inventoryRecords",
           action: "list",
-          payload: {},
+          payload: { storeId: this.storeId },
           cacheable: true
         })
       ]);
 
       if (Array.isArray(remoteSessions)) {
-        this.sessions = remoteSessions;
+        this.sessions = remoteSessions
+          .filter((item) => item && (item.storeId === this.storeId || !item.storeId))
+          .map((item) => ({ ...item, storeId: item.storeId ?? this.storeId }));
       }
 
       if (Array.isArray(remoteRecords)) {
-        this.records = remoteRecords;
+        this.records = remoteRecords
+          .filter((item) => item && (item.storeId === this.storeId || !item.storeId))
+          .map((item) => ({ ...item, storeId: item.storeId ?? this.storeId }));
       }
     } catch (error) {
       this.lastSyncError = error instanceof Error ? error.message : "inventory pull failed";
     }
   }
 
-  pushRecord(record) {
+  async pushRecord(record) {
     if (!gasApiClient.isEnabled()) {
-      return;
+      return { success: true };
     }
 
     const session = this.sessions.find((item) => item.sessionId === record.sessionId);
     const payloadItem = {
       ...record,
+      storeId: this.storeId,
       storeName: session?.storeName ?? "",
       inventoryDate: session?.inventoryDate ?? ""
     };
 
-    void gasApiClient
-      .request({
+    try {
+      await gasApiClient.request({
         entity: "inventoryRecords",
         action: "upsert",
         payload: { item: payloadItem }
-      })
-      .catch((error) => {
-        this.lastSyncError = error instanceof Error ? error.message : "record sync failed";
       });
+      return { success: true };
+    } catch (error) {
+      this.lastSyncError = error instanceof Error ? error.message : "record sync failed";
+      return {
+        success: false,
+        error: "Googleスプレッドシートへの保存に失敗しました。"
+      };
+    }
   }
 }
