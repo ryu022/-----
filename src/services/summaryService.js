@@ -3,6 +3,12 @@ import { calculationService } from "./calculationService.js";
 import { inventoryService } from "./inventoryService.js";
 import { productService } from "./productService.js";
 
+const CATEGORY_LOCATION_KEYS = {
+  鮮魚: ["salesFloor", "backyard"],
+  塩干: ["salesFloor", "backyard"],
+  資材: ["materials"]
+};
+
 class SummaryService {
   getRowsByCategory(category) {
     const products = productService.listProducts().filter((product) => product.category === category);
@@ -11,19 +17,47 @@ class SummaryService {
     const rows = products.map((product) => {
       const salesFloorQuantity = inventoryService.getQuantityByProductAndLocation(session?.sessionId, product.id, "salesFloor");
       const backyardQuantity = inventoryService.getQuantityByProductAndLocation(session?.sessionId, product.id, "backyard");
-      const totalQuantity = calculationService.computeTotalQuantity(salesFloorQuantity, backyardQuantity);
+      const materialsQuantity = inventoryService.getQuantityByProductAndLocation(session?.sessionId, product.id, "materials");
+      const totalQuantity = this.computeCategoryQuantity({
+        category,
+        salesFloorQuantity,
+        backyardQuantity,
+        materialsQuantity
+      });
       const amount = calculationService.computeAmount(product.cost, totalQuantity);
 
       return {
         product,
         salesFloorQuantity,
         backyardQuantity,
+        materialsQuantity,
         totalQuantity,
         amount
       };
     });
 
     return rows;
+  }
+
+  computeCategoryQuantity({ category, salesFloorQuantity, backyardQuantity, materialsQuantity }) {
+    const locationKeys = CATEGORY_LOCATION_KEYS[category] ?? ["salesFloor", "backyard"];
+    let total = 0;
+
+    locationKeys.forEach((locationKey) => {
+      if (locationKey === "salesFloor") {
+        total += calculationService.toNumber(salesFloorQuantity);
+      }
+
+      if (locationKey === "backyard") {
+        total += calculationService.toNumber(backyardQuantity);
+      }
+
+      if (locationKey === "materials") {
+        total += calculationService.toNumber(materialsQuantity);
+      }
+    });
+
+    return calculationService.roundQuantity(total);
   }
 
   getCategoryTotals() {

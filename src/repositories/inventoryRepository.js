@@ -10,6 +10,33 @@ const getSessionStorageKey = (storeId) => `${SESSION_STORAGE_KEY_PREFIX}:${store
 const getRecordStorageKey = (storeId) => `${RECORD_STORAGE_KEY_PREFIX}:${storeId || "default"}`;
 const getActiveSessionStorageKey = (storeId) => `${ACTIVE_SESSION_STORAGE_KEY_PREFIX}:${storeId || "default"}`;
 
+const LOCATION_LABEL_BY_KEY = {
+  salesFloor: "売場",
+  backyard: "バックヤード",
+  materials: "資材"
+};
+
+const LOCATION_KEY_BY_ALIAS = new Map([
+  ["salesFloor", "salesFloor"],
+  ["売場", "salesFloor"],
+  ["backyard", "backyard"],
+  ["バックヤード", "backyard"],
+  ["materials", "materials"],
+  ["資材", "materials"]
+]);
+
+const normalizeLocationKey = (value) => {
+  const normalized = String(value ?? "").trim();
+  return LOCATION_KEY_BY_ALIAS.get(normalized) ?? normalized;
+};
+
+const normalizeRecordLocation = (record) => ({
+  ...record,
+  location: normalizeLocationKey(record.location)
+});
+
+const toSheetLocationLabel = (locationKey) => LOCATION_LABEL_BY_KEY[normalizeLocationKey(locationKey)] ?? locationKey;
+
 export class InventoryRepository {
   constructor() {
     this.sessions = [];
@@ -28,7 +55,7 @@ export class InventoryRepository {
 
     if (localSessions && localRecords) {
       this.sessions = JSON.parse(localSessions);
-      this.records = JSON.parse(localRecords);
+      this.records = JSON.parse(localRecords).map((item) => normalizeRecordLocation(item));
       this.activeSessionId = localActiveSessionId ?? "";
     } else {
       try {
@@ -42,7 +69,9 @@ export class InventoryRepository {
         }
 
         this.sessions = (await sessionResponse.json()).map((item) => ({ ...item, storeId: item.storeId ?? this.storeId }));
-        this.records = (await recordResponse.json()).map((item) => ({ ...item, storeId: item.storeId ?? this.storeId }));
+        this.records = (await recordResponse.json()).map((item) =>
+          normalizeRecordLocation({ ...item, storeId: item.storeId ?? this.storeId })
+        );
       } catch {
         this.sessions = [];
         this.records = [];
@@ -68,7 +97,7 @@ export class InventoryRepository {
 
     if (localSessions && localRecords) {
       this.sessions = JSON.parse(localSessions);
-      this.records = JSON.parse(localRecords);
+      this.records = JSON.parse(localRecords).map((item) => normalizeRecordLocation(item));
       this.activeSessionId = localActiveSessionId ?? "";
     } else {
       this.sessions = [];
@@ -132,15 +161,19 @@ export class InventoryRepository {
   }
 
   getRecord(sessionId, productId, location) {
+    const normalizedLocation = normalizeLocationKey(location);
     return clone(
       this.records.find(
-        (record) => record.sessionId === sessionId && record.productId === productId && record.location === location
+        (record) =>
+          record.sessionId === sessionId &&
+          record.productId === productId &&
+          normalizeLocationKey(record.location) === normalizedLocation
       )
     );
   }
 
   async upsertRecord(record) {
-    const normalized = { ...clone(record), storeId: this.storeId };
+    const normalized = normalizeRecordLocation({ ...clone(record), storeId: this.storeId });
     const index = this.records.findIndex(
       (item) => item.sessionId === normalized.sessionId && item.productId === normalized.productId && item.location === normalized.location
     );
@@ -218,7 +251,7 @@ export class InventoryRepository {
       if (Array.isArray(remoteRecords)) {
         this.records = remoteRecords
           .filter((item) => item && (item.storeId === this.storeId || !item.storeId))
-          .map((item) => ({ ...item, storeId: item.storeId ?? this.storeId }));
+          .map((item) => normalizeRecordLocation({ ...item, storeId: item.storeId ?? this.storeId }));
       }
     } catch (error) {
       this.lastSyncError = error instanceof Error ? error.message : "inventory pull failed";
@@ -234,6 +267,7 @@ export class InventoryRepository {
     const payloadItem = {
       ...record,
       storeId: this.storeId,
+      location: toSheetLocationLabel(record.location),
       storeName: session?.storeName ?? "",
       inventoryDate: session?.inventoryDate ?? ""
     };

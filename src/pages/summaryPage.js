@@ -17,16 +17,15 @@ export const renderSummaryPage = () => {
     tableHost.innerHTML = "";
     const rows = summaryService.getRowsByCategory(activeCategory);
     const { categoryTotals, grandTotal } = summaryService.getCategoryTotals();
+    const isMaterials = activeCategory === "資材";
 
     const table = document.createElement("table");
     table.className = "data-table";
     table.innerHTML = `
       <thead>
         <tr>
-          <th>商品名</th>
-          <th>売場数量</th>
-          <th>バックヤード数量</th>
-          <th>合計数量</th>
+          <th>${isMaterials ? "資材商品" : "商品名"}</th>
+          ${isMaterials ? "<th>数量</th>" : "<th>売場数量</th><th>バックヤード数量</th><th>合計数量</th>"}
           <th>原価</th>
           <th>金額</th>
         </tr>
@@ -35,9 +34,7 @@ export const renderSummaryPage = () => {
         ${rows.map((row) => `
           <tr>
             <td>${row.product.name}</td>
-            <td>${row.salesFloorQuantity}</td>
-            <td>${row.backyardQuantity}</td>
-            <td>${row.totalQuantity}</td>
+            ${isMaterials ? `<td>${row.materialsQuantity}</td>` : `<td>${row.salesFloorQuantity}</td><td>${row.backyardQuantity}</td><td>${row.totalQuantity}</td>`}
             <td>${formatYen(row.product.cost)}</td>
             <td>${formatYen(row.amount)}</td>
           </tr>
