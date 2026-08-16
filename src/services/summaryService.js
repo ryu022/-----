@@ -10,14 +10,14 @@ const CATEGORY_LOCATION_KEYS = {
 };
 
 class SummaryService {
-  getRowsByCategory(category) {
+  getRowsByCategory(category, sessionId) {
     const products = productService.listProducts().filter((product) => product.category === category);
-    const session = inventoryService.getActiveSession();
+    const targetSessionId = sessionId ?? inventoryService.getActiveSession()?.sessionId;
 
     const rows = products.map((product) => {
-      const salesFloorQuantity = inventoryService.getQuantityByProductAndLocation(session?.sessionId, product.id, "salesFloor");
-      const backyardQuantity = inventoryService.getQuantityByProductAndLocation(session?.sessionId, product.id, "backyard");
-      const materialsQuantity = inventoryService.getQuantityByProductAndLocation(session?.sessionId, product.id, "materials");
+      const salesFloorQuantity = inventoryService.getQuantityByProductAndLocation(targetSessionId, product.id, "salesFloor");
+      const backyardQuantity = inventoryService.getQuantityByProductAndLocation(targetSessionId, product.id, "backyard");
+      const materialsQuantity = inventoryService.getQuantityByProductAndLocation(targetSessionId, product.id, "materials");
       const totalQuantity = this.computeCategoryQuantity({
         category,
         salesFloorQuantity,
@@ -60,11 +60,11 @@ class SummaryService {
     return calculationService.roundQuantity(total);
   }
 
-  getCategoryTotals() {
+  getCategoryTotals(sessionId) {
     const categoryTotals = {};
 
     PRODUCT_CATEGORIES.forEach((category) => {
-      const total = this.getRowsByCategory(category).reduce((sum, row) => sum + row.amount, 0);
+      const total = this.getRowsByCategory(category, sessionId).reduce((sum, row) => sum + row.amount, 0);
       categoryTotals[category] = total;
     });
 

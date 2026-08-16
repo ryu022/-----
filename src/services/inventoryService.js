@@ -11,6 +11,12 @@ export const LOCATION_TABS = [
   { label: "資材", key: "materials" }
 ];
 
+const EDITABLE_LOCATION_KEYS_BY_CATEGORY = {
+  鮮魚: ["salesFloor", "backyard"],
+  塩干: ["salesFloor", "backyard"],
+  資材: ["materials"]
+};
+
 class InventoryService {
   constructor() {
     this.repository = new InventoryRepository();
@@ -22,6 +28,18 @@ class InventoryService {
 
   getActiveSession() {
     return this.repository.getActiveSession();
+  }
+
+  listSessions() {
+    return this.repository.listSessions().sort((a, b) => {
+      const aSortKey = a.completedAt || a.updatedAt || a.createdAt || a.inventoryDate || "";
+      const bSortKey = b.completedAt || b.updatedAt || b.createdAt || b.inventoryDate || "";
+      return String(bSortKey).localeCompare(String(aSortKey));
+    });
+  }
+
+  getSessionById(sessionId) {
+    return this.repository.getSessionById(sessionId);
   }
 
   // 既存画面の互換維持: 商品マスター一覧を取得する。
@@ -51,15 +69,12 @@ class InventoryService {
     productService.repository.setStoreId(storeId);
     assignmentService.repository.setStoreId(storeId);
 
-    const existing = this.repository.findSessionByStoreDate(normalizedStoreName, normalizedInventoryDate);
-    const session = existing
-      ? new InventorySessionModel({ ...existing, storeId })
-      : InventorySessionModel.create({
-          sessionId: this.repository.nextSessionId(),
-          storeId,
-          storeName: normalizedStoreName,
-          inventoryDate: normalizedInventoryDate
-        });
+    const session = InventorySessionModel.create({
+      sessionId: this.repository.nextSessionId(),
+      storeId,
+      storeName: normalizedStoreName,
+      inventoryDate: normalizedInventoryDate
+    });
 
     const result = await this.repository.saveSession(session);
     if (!result.success) {
@@ -101,6 +116,10 @@ class InventoryService {
     return record ? record.quantity : 0;
   }
 
+  getEditableLocationKeysByCategory(category) {
+    return EDITABLE_LOCATION_KEYS_BY_CATEGORY[category] ?? ["salesFloor", "backyard"];
+  }
+
   async saveQuantity({ productId, locationKey, quantity }) {
     const session = this.repository.getActiveSession();
     if (!session) {
@@ -113,17 +132,20 @@ class InventoryService {
     }
 
     const current = this.repository.getRecord(session.sessionId, productId, locationKey);
+    const now = new Date().toISOString();
     const record = current
       ? new InventoryRecordModel({
           ...current,
-          quantity: numericQuantity
+          quantity: numericQuantity,
+          updatedAt: now
         })
       : InventoryRecordModel.create({
           recordId: this.repository.nextRecordId(),
           sessionId: session.sessionId,
           productId,
           location: locationKey,
-          quantity: numericQuantity
+          quantity: numericQuantity,
+          updatedAt: now
         });
 
     const result = await this.repository.upsertRecord(record);
@@ -131,6 +153,67 @@ class InventoryService {
       return { success: false, error: result.error, changed: false };
     }
     return { success: true, changed: result.changed };
+  }
+
+  async saveQuantityForSession({ sessionId, productId, locationKey, quantity, updatedBy = "" }) {
+    const session = this.repository.getSessionById(sessionId);
+    if (!session) {
+      return { success: false, error: "棚卸セッションが見つかりません。" };
+    }
+
+    const numericQuantity = Number(quantity);
+    if (!Number.isFinite(numericQuantity) || numericQuantity < 0) {
+      return { success: false, error: "数量は0以上の数値で入力してください。" };
+    }
+
+    const current = this.repository.getRecord(sessionId, productId, locationKey);
+    const now = new Date().toISOString();
+    const record = current
+      ? new InventoryRecordModel({
+          ...current,
+          quantity: numericQuantity,
+          updatedAt: now,
+          updatedBy
+        })
+      : InventoryRecordModel.create({
+          recordId: this.repository.nextRecordId(),
+          sessionId,
+          productId,
+          location: locationKey,
+          quantity: numericQuantity,
+          updatedAt: now,
+          updatedBy
+        });
+
+    const result = await this.repository.upsertRecord(record);
+    if (!result.success) {
+      return { success: false, error: result.error, changed: false };
+    }
+
+    const nextSession = new InventorySessionModel({
+      ...session,
+      updatedAt: now,
+      updatedBy: updatedBy || session.updatedBy || ""
+    });
+    await this.repository.saveSession(nextSession, { setActive: false });
+    return { success: true, changed: result.changed };
+  }
+
+  async completeActiveSession({ completedBy = "" } = {}) {
+    const session = this.repository.getActiveSession();
+    if (!session) {
+      return { success: false, error: "棚卸セッションが開始されていません。" };
+    }
+
+    if (session.status === "completed") {
+      return { success: true, session };
+    }
+
+    return this.repository.completeSession({ sessionId: session.sessionId, completedBy });
+  }
+
+  async deleteSessionsByIds(sessionIds) {
+    return this.repository.deleteSessionsByIds(sessionIds);
   }
 }
 

@@ -6,6 +6,7 @@ import { renderProductLedgerPage } from "./pages/productLedgerPage.js";
 import { renderProductRegisterPage } from "./pages/productRegisterPage.js";
 import { renderProductAllocationPage } from "./pages/productAllocationPage.js";
 import { renderInventoryPage } from "./pages/inventoryPage.js";
+import { renderPastInventoryPage } from "./pages/pastInventoryPage.js";
 import { renderSummaryPage } from "./pages/summaryPage.js";
 import { renderPrintPage } from "./pages/printPage.js";
 import { productService } from "./services/productService.js";
@@ -20,6 +21,7 @@ const pageRenderers = {
   [ROUTES.REGISTER]: renderProductRegisterPage,
   [ROUTES.ALLOCATION]: renderProductAllocationPage,
   [ROUTES.INVENTORY]: renderInventoryPage,
+  [ROUTES.HISTORY]: renderPastInventoryPage,
   [ROUTES.SUMMARY]: renderSummaryPage,
   [ROUTES.PRINT]: renderPrintPage
 };

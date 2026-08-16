@@ -1,6 +1,7 @@
 const SHEETS = {
   PRODUCTS: "商品マスター",
   ASSIGNMENTS: "商品振り分け",
+  INVENTORY_SESSIONS: "棚卸セッション",
   INVENTORY: "棚卸データ"
 };
 
@@ -19,6 +20,18 @@ const HEADERS = {
     "materialsOrder",
     "createdAt",
     "updatedAt"
+  ],
+  [SHEETS.INVENTORY_SESSIONS]: [
+    "sessionId",
+    "storeId",
+    "storeName",
+    "inventoryDate",
+    "status",
+    "createdAt",
+    "completedAt",
+    "completedBy",
+    "updatedAt",
+    "updatedBy"
   ],
   [SHEETS.INVENTORY]: [
     "recordId",
@@ -191,16 +204,28 @@ function handleAssignments_(action, payload, storeId) {
 }
 
 function handleInventorySessions_(action, payload, storeId) {
-  const sheet = getSheet_(SHEETS.INVENTORY);
+  const sessionSheet = getSheet_(SHEETS.INVENTORY_SESSIONS);
+  const recordSheet = getSheet_(SHEETS.INVENTORY);
   const targetStoreId = normalizeStoreId_(storeId || (payload && payload.storeId) || "");
 
   if (action === "list") {
-    const all = filterRowsByStoreId_(readRows_(sheet), targetStoreId);
-    return uniqueSessions_(all);
+    const sessionRows = filterRowsByStoreId_(readRows_(sessionSheet), targetStoreId);
+    const legacyRows = filterRowsByStoreId_(readRows_(recordSheet), targetStoreId).filter(function (row) {
+      return row.location === "__SESSION__";
+    });
+    return mergeSessions_(sessionRows, legacyRows);
   }
 
-  if (action === "upsert") {
+  if (action === "upsert" || action === "complete") {
     const item = sanitizeSession_(payload.item || payload, targetStoreId);
+    if (action === "complete") {
+      item.status = "completed";
+      item.completedAt = item.completedAt || new Date().toISOString();
+    }
+
+    item.updatedAt = new Date().toISOString();
+    upsertByKey_(sessionSheet, "sessionId", item, targetStoreId);
+
     const sessionRow = {
       recordId: "SESSION:" + item.sessionId,
       storeId: item.storeId,
@@ -213,10 +238,35 @@ function handleInventorySessions_(action, payload, storeId) {
       updatedAt: new Date().toISOString(),
       updatedBy: item.updatedBy || ""
     };
-    upsertByKey_(sheet, "recordId", sessionRow, targetStoreId);
+    upsertByKey_(recordSheet, "recordId", sessionRow, targetStoreId);
     clearCache_("inventorySessions:list:{}");
     clearCache_("inventoryRecords:list:{}");
     return toSessionResponse_(item);
+  }
+
+  if (action === "delete") {
+    const sessionId = String(payload.sessionId || "");
+    if (!sessionId) {
+      return { deletedSessionCount: 0, deletedRecordCount: 0 };
+    }
+
+    const result = deleteBySessionIds_([sessionId], targetStoreId);
+    clearCache_("inventorySessions:list:{}");
+    clearCache_("inventoryRecords:list:{}");
+    return result;
+  }
+
+  if (action === "bulkDelete") {
+    const sessionIds = (payload.sessionIds || []).map(function (id) {
+      return String(id || "").trim();
+    }).filter(function (id) {
+      return Boolean(id);
+    });
+
+    const result = deleteBySessionIds_(sessionIds, targetStoreId);
+    clearCache_("inventorySessions:list:{}");
+    clearCache_("inventoryRecords:list:{}");
+    return result;
   }
 
   throw new Error("Unsupported inventorySessions action: " + action);
@@ -241,12 +291,23 @@ function handleInventoryRecords_(action, payload, storeId) {
     return toRecordResponse_(item);
   }
 
+  if (action === "deleteBySession") {
+    const sessionId = String(payload.sessionId || "").trim();
+    if (!sessionId) {
+      return { deletedRecordCount: 0 };
+    }
+
+    const result = deleteRecordsBySessionId_(sessionId, targetStoreId);
+    clearCache_("inventoryRecords:list:{}");
+    return result;
+  }
+
   throw new Error("Unsupported inventoryRecords action: " + action);
 }
 
 function handleInventory_(action, payload, storeId) {
-  const sessions = handleInventorySessions_(action, payload, storeId);
-  const records = handleInventoryRecords_(action, payload, storeId);
+  const sessions = handleInventorySessions_("list", payload, storeId);
+  const records = handleInventoryRecords_("list", payload, storeId);
   return { sessions: sessions, records: records };
 }
 
@@ -391,22 +452,34 @@ function deleteByKey_(sheet, keyName, keyValue, storeId) {
   }
 }
 
-function uniqueSessions_(rows) {
+function mergeSessions_(sessionRows, legacyRows) {
   const map = {};
-  rows.forEach(function (row) {
+
+  (legacyRows || []).forEach(function (row) {
     if (!row.sessionId) {
       return;
     }
 
-    if (row.location === "__SESSION__") {
-      map[row.sessionId] = {
-        sessionId: row.sessionId,
-        storeId: row.storeId,
-        storeName: row.storeName,
-        inventoryDate: row.inventoryDate,
-        createdAt: row.createdAt || new Date().toISOString()
-      };
+    map[row.sessionId] = {
+      sessionId: row.sessionId,
+      storeId: row.storeId,
+      storeName: row.storeName,
+      inventoryDate: row.inventoryDate,
+      status: "draft",
+      createdAt: row.updatedAt || new Date().toISOString(),
+      completedAt: "",
+      completedBy: "",
+      updatedAt: row.updatedAt || new Date().toISOString(),
+      updatedBy: row.updatedBy || ""
+    };
+  });
+
+  (sessionRows || []).forEach(function (row) {
+    if (!row.sessionId) {
+      return;
     }
+
+    map[row.sessionId] = toSessionResponse_(row);
   });
 
   return Object.keys(map).map(function (key) {
@@ -414,11 +487,75 @@ function uniqueSessions_(rows) {
   });
 }
 
+function deleteBySessionIds_(sessionIds, storeId) {
+  const ids = (sessionIds || []).map(function (id) {
+    return String(id || "").trim();
+  }).filter(function (id) {
+    return Boolean(id);
+  });
+
+  if (ids.length === 0) {
+    return { deletedSessionCount: 0, deletedRecordCount: 0 };
+  }
+
+  const deletedSessions = deleteRowsByMatcher_(getSheet_(SHEETS.INVENTORY_SESSIONS), function (row) {
+    return ids.indexOf(String(row.sessionId || "")) >= 0;
+  }, storeId);
+
+  const deletedRecords = deleteRowsByMatcher_(getSheet_(SHEETS.INVENTORY), function (row) {
+    return ids.indexOf(String(row.sessionId || "")) >= 0;
+  }, storeId);
+
+  return {
+    deletedSessionCount: deletedSessions,
+    deletedRecordCount: deletedRecords
+  };
+}
+
+function deleteRecordsBySessionId_(sessionId, storeId) {
+  const deletedRecords = deleteRowsByMatcher_(getSheet_(SHEETS.INVENTORY), function (row) {
+    return String(row.sessionId || "") === String(sessionId || "");
+  }, storeId);
+
+  return { deletedRecordCount: deletedRecords };
+}
+
+function deleteRowsByMatcher_(sheet, matcher, storeId) {
+  const lock = LockService.getDocumentLock();
+  lock.waitLock(10000);
+  try {
+    const storeFilter = normalizeStoreId_(storeId || "");
+    const rows = readRows_(sheet).filter(function (row) {
+      return !storeFilter || String(row.storeId || "") === storeFilter;
+    });
+
+    const rowNumbers = rows
+      .filter(function (row) {
+        return matcher(row);
+      })
+      .map(function (row) {
+        return row.__rowNumber;
+      })
+      .sort(function (a, b) {
+        return b - a;
+      });
+
+    rowNumbers.forEach(function (rowNumber) {
+      sheet.deleteRow(rowNumber);
+    });
+
+    return rowNumbers.length;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function clearCache_(key) {
   const cache = CacheService.getScriptCache();
   cache.remove(key);
   cache.remove(SHEETS.PRODUCTS + ":rows");
   cache.remove(SHEETS.ASSIGNMENTS + ":rows");
+  cache.remove(SHEETS.INVENTORY_SESSIONS + ":rows");
   cache.remove(SHEETS.INVENTORY + ":rows");
 }
 
@@ -468,12 +605,17 @@ function sanitizeAssignment_(item, storeId) {
 }
 
 function sanitizeSession_(item, storeId) {
+  const now = new Date().toISOString();
   return {
     sessionId: sanitizeText_(item.sessionId),
     storeId: normalizeStoreId_(storeId || item.storeId || ""),
     storeName: sanitizeText_(item.storeName),
     inventoryDate: sanitizeText_(item.inventoryDate),
-    createdAt: sanitizeText_(item.createdAt) || new Date().toISOString(),
+    status: sanitizeText_(item.status) || "draft",
+    createdAt: sanitizeText_(item.createdAt) || now,
+    completedAt: sanitizeText_(item.completedAt),
+    completedBy: sanitizeText_(item.completedBy),
+    updatedAt: sanitizeText_(item.updatedAt) || now,
     updatedBy: sanitizeText_(item.updatedBy)
   };
 }
@@ -529,7 +671,11 @@ function toSessionResponse_(row) {
     storeId: row.storeId || "",
     storeName: row.storeName || "",
     inventoryDate: row.inventoryDate || "",
+    status: row.status || "draft",
     createdAt: row.createdAt || "",
+    completedAt: row.completedAt || "",
+    completedBy: row.completedBy || "",
+    updatedAt: row.updatedAt || "",
     updatedBy: row.updatedBy || ""
   };
 }

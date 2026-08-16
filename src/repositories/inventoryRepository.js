@@ -37,6 +37,16 @@ const normalizeRecordLocation = (record) => ({
 
 const toSheetLocationLabel = (locationKey) => LOCATION_LABEL_BY_KEY[normalizeLocationKey(locationKey)] ?? locationKey;
 
+const normalizeSession = (session, storeId) => ({
+  ...session,
+  storeId: session?.storeId ?? storeId,
+  status: session?.status || "draft",
+  completedAt: session?.completedAt || "",
+  completedBy: session?.completedBy || "",
+  updatedAt: session?.updatedAt || session?.createdAt || new Date().toISOString(),
+  updatedBy: session?.updatedBy || ""
+});
+
 export class InventoryRepository {
   constructor() {
     this.sessions = [];
@@ -54,7 +64,7 @@ export class InventoryRepository {
     const localActiveSessionId = window.localStorage.getItem(getActiveSessionStorageKey(this.storeId));
 
     if (localSessions && localRecords) {
-      this.sessions = JSON.parse(localSessions);
+      this.sessions = JSON.parse(localSessions).map((item) => normalizeSession(item, this.storeId));
       this.records = JSON.parse(localRecords).map((item) => normalizeRecordLocation(item));
       this.activeSessionId = localActiveSessionId ?? "";
     } else {
@@ -68,7 +78,7 @@ export class InventoryRepository {
           throw new Error("failed to fetch inventory seed");
         }
 
-        this.sessions = (await sessionResponse.json()).map((item) => ({ ...item, storeId: item.storeId ?? this.storeId }));
+        this.sessions = (await sessionResponse.json()).map((item) => normalizeSession(item, this.storeId));
         this.records = (await recordResponse.json()).map((item) =>
           normalizeRecordLocation({ ...item, storeId: item.storeId ?? this.storeId })
         );
@@ -80,6 +90,11 @@ export class InventoryRepository {
 
     if (gasApiClient.isEnabled()) {
       await this.pullFromGas();
+    }
+
+    const activeSession = this.sessions.find((session) => session.sessionId === this.activeSessionId);
+    if (activeSession && activeSession.status === "completed") {
+      this.activeSessionId = "";
     }
 
     this.persistSessions();
@@ -96,9 +111,14 @@ export class InventoryRepository {
     const localActiveSessionId = window.localStorage.getItem(getActiveSessionStorageKey(this.storeId));
 
     if (localSessions && localRecords) {
-      this.sessions = JSON.parse(localSessions);
+      this.sessions = JSON.parse(localSessions).map((item) => normalizeSession(item, this.storeId));
       this.records = JSON.parse(localRecords).map((item) => normalizeRecordLocation(item));
       this.activeSessionId = localActiveSessionId ?? "";
+
+      const activeSession = this.sessions.find((session) => session.sessionId === this.activeSessionId);
+      if (activeSession && activeSession.status === "completed") {
+        this.activeSessionId = "";
+      }
     } else {
       this.sessions = [];
       this.records = [];
@@ -114,6 +134,24 @@ export class InventoryRepository {
     return clone(this.sessions.find((session) => session.sessionId === this.activeSessionId));
   }
 
+  setActiveSessionId(sessionId) {
+    this.activeSessionId = sessionId;
+    this.persistActiveSessionId();
+  }
+
+  clearActiveSessionId() {
+    this.activeSessionId = "";
+    this.persistActiveSessionId();
+  }
+
+  listSessions() {
+    return clone(this.sessions);
+  }
+
+  getSessionById(sessionId) {
+    return clone(this.sessions.find((session) => session.sessionId === sessionId));
+  }
+
   findSessionByStoreDate(storeName, inventoryDate) {
     return clone(
       this.sessions.find(
@@ -122,8 +160,8 @@ export class InventoryRepository {
     );
   }
 
-  async saveSession(session) {
-    const normalized = { ...clone(session), storeId: this.storeId };
+  async saveSession(session, { setActive = true } = {}) {
+    const normalized = normalizeSession({ ...clone(session), storeId: this.storeId }, this.storeId);
     const index = this.sessions.findIndex((item) => item.sessionId === normalized.sessionId);
     if (index >= 0) {
       this.sessions[index] = normalized;
@@ -131,7 +169,9 @@ export class InventoryRepository {
       this.sessions.push(normalized);
     }
 
-    this.activeSessionId = normalized.sessionId;
+    if (setActive) {
+      this.activeSessionId = normalized.sessionId;
+    }
     this.persistSessions();
     this.persistActiveSessionId();
 
@@ -204,6 +244,99 @@ export class InventoryRepository {
     return `S${String(max + 1).padStart(6, "0")}`;
   }
 
+  async completeSession({ sessionId, completedBy = "" }) {
+    const index = this.sessions.findIndex((session) => session.sessionId === sessionId);
+    if (index < 0) {
+      return { success: false, error: "棚卸セッションが見つかりません。" };
+    }
+
+    const now = new Date().toISOString();
+    const completedSession = normalizeSession(
+      {
+        ...this.sessions[index],
+        status: "completed",
+        completedAt: now,
+        completedBy: completedBy || this.sessions[index].completedBy || "",
+        updatedAt: now,
+        updatedBy: completedBy || this.sessions[index].updatedBy || ""
+      },
+      this.storeId
+    );
+
+    this.sessions[index] = completedSession;
+    this.clearActiveSessionId();
+    this.persistSessions();
+
+    if (!gasApiClient.isEnabled()) {
+      return { success: true, session: clone(completedSession) };
+    }
+
+    try {
+      await gasApiClient.request({
+        entity: "inventorySessions",
+        action: "complete",
+        payload: { item: completedSession }
+      });
+      return { success: true, session: clone(completedSession) };
+    } catch (error) {
+      this.lastSyncError = error instanceof Error ? error.message : "session complete failed";
+      return {
+        success: false,
+        error: "Googleスプレッドシートへの保存に失敗しました。",
+        session: clone(completedSession)
+      };
+    }
+  }
+
+  async deleteSessionsByIds(sessionIds) {
+    const targets = new Set((sessionIds || []).filter(Boolean));
+    if (targets.size === 0) {
+      return { success: true, deletedCount: 0 };
+    }
+
+    if (!gasApiClient.isEnabled()) {
+      const beforeCount = this.sessions.length;
+      this.sessions = this.sessions.filter((session) => !targets.has(session.sessionId));
+      this.records = this.records.filter((record) => !targets.has(record.sessionId));
+
+      if (targets.has(this.activeSessionId)) {
+        this.clearActiveSessionId();
+      }
+
+      this.persistSessions();
+      this.persistRecords();
+      return { success: true, deletedCount: beforeCount - this.sessions.length };
+    }
+
+    try {
+      await gasApiClient.request({
+        entity: "inventorySessions",
+        action: "bulkDelete",
+        payload: { sessionIds: Array.from(targets) }
+      });
+
+      const beforeCount = this.sessions.length;
+      this.sessions = this.sessions.filter((session) => !targets.has(session.sessionId));
+      this.records = this.records.filter((record) => !targets.has(record.sessionId));
+
+      if (targets.has(this.activeSessionId)) {
+        this.clearActiveSessionId();
+      }
+
+      this.persistSessions();
+      this.persistRecords();
+
+      return { success: true, deletedCount: beforeCount - this.sessions.length };
+    } catch (error) {
+      this.lastSyncError = error instanceof Error ? error.message : "session bulk delete failed";
+      return {
+        success: false,
+        error: "Googleスプレッドシートからの削除に失敗しました。",
+        deletedCount: 0
+      };
+    }
+  }
+
   nextRecordId() {
     const max = this.records.reduce((acc, item) => {
       const numeric = Number(String(item.recordId).replace(/^R/, ""));
@@ -245,7 +378,7 @@ export class InventoryRepository {
       if (Array.isArray(remoteSessions)) {
         this.sessions = remoteSessions
           .filter((item) => item && (item.storeId === this.storeId || !item.storeId))
-          .map((item) => ({ ...item, storeId: item.storeId ?? this.storeId }));
+          .map((item) => normalizeSession(item, this.storeId));
       }
 
       if (Array.isArray(remoteRecords)) {
@@ -269,7 +402,8 @@ export class InventoryRepository {
       storeId: this.storeId,
       location: toSheetLocationLabel(record.location),
       storeName: session?.storeName ?? "",
-      inventoryDate: session?.inventoryDate ?? ""
+      inventoryDate: session?.inventoryDate ?? "",
+      updatedBy: record?.updatedBy || ""
     };
 
     try {

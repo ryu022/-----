@@ -31,7 +31,26 @@ export class InventoryController {
 
     const meta = this.createSessionMeta(session);
     const editor = this.createEditor(session);
-    page.append(meta, editor);
+    const completeButton = this.createCompleteButton(async () => {
+      const confirmed = window.confirm(
+        "棚卸を完了しますか？\n\n棚卸を完了すると、この棚卸データを過去の棚卸データとして保存します。"
+      );
+
+      if (!confirmed) {
+        return;
+      }
+
+      const result = await inventoryService.completeActiveSession();
+      if (!result.success) {
+        window.alert(result.error || "棚卸完了に失敗しました。");
+        return;
+      }
+
+      window.alert("棚卸を完了しました。過去の棚卸に保存されました。");
+      page.replaceWith(this.render());
+    });
+
+    page.append(meta, editor, completeButton);
     return page;
   }
 
@@ -110,9 +129,24 @@ export class InventoryController {
     meta.innerHTML = `
       <div><strong>店舗名:</strong> ${escapeHtml(session.storeName)}</div>
       <div><strong>棚卸日:</strong> ${escapeHtml(session.inventoryDate)}</div>
+      <div><strong>ステータス:</strong> ${escapeHtml(session.status || "draft")}</div>
       <div class="inventory-save-state" data-save-state>保存状態: 待機中</div>
     `;
     return meta;
+  }
+
+  createCompleteButton(onComplete) {
+    const wrap = document.createElement("div");
+    wrap.className = "inventory-complete-wrap";
+
+    const button = createPrimaryButton({
+      label: "棚卸完了",
+      onClick: onComplete
+    });
+
+    button.classList.add("inventory-complete-button");
+    wrap.appendChild(button);
+    return wrap;
   }
 
   createEditor() {

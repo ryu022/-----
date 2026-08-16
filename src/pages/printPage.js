@@ -1,7 +1,6 @@
 import { inventoryService } from "../services/inventoryService.js";
-import { productService } from "../services/productService.js";
 import { createSectionCard } from "../components/ui.js";
-import { calculationService } from "../services/calculationService.js";
+import { summaryService } from "../services/summaryService.js";
 import { escapeHtml } from "../utils/security.js";
 
 const CATEGORIES = ["鮮魚", "塩干", "資材"];
@@ -23,22 +22,8 @@ const formatCurrency = (value) => `${Number(value).toLocaleString("ja-JP", { max
 
 const buildRows = () => {
   const session = inventoryService.getActiveSession();
-  const products = productService.listProducts();
 
-  return products.map((product) => {
-    const salesFloorQuantity = inventoryService.getQuantityByProductAndLocation(session?.sessionId, product.id, "salesFloor");
-    const backyardQuantity = inventoryService.getQuantityByProductAndLocation(session?.sessionId, product.id, "backyard");
-    const totalQuantity = calculationService.computeTotalQuantity(salesFloorQuantity, backyardQuantity);
-    const amount = calculationService.computeAmount(product.cost, totalQuantity);
-
-    return {
-      product,
-      salesFloorQuantity,
-      backyardQuantity,
-      totalQuantity,
-      amount
-    };
-  });
+  return CATEGORIES.flatMap((category) => summaryService.getRowsByCategory(category, session?.sessionId));
 };
 
 const buildTotals = (rows) => {
@@ -60,18 +45,24 @@ const buildTotals = (rows) => {
 };
 
 const splitPages = (rows, perPage) => {
+  if (!rows || rows.length === 0) {
+    return [];
+  }
+
   const pages = [];
   for (let i = 0; i < rows.length; i += perPage) {
     pages.push(rows.slice(i, i + perPage));
   }
-  return pages.length > 0 ? pages : [[]];
+  return pages;
 };
 
 const buildPrintData = (rows, storeName, inventoryDate) => {
   const totals = buildTotals(rows);
   const pages = [];
 
-  CATEGORIES.forEach((category, categoryIndex) => {
+  const printableCategories = CATEGORIES.filter((category) => (totals.byCategory[category] ?? []).length > 0);
+
+  printableCategories.forEach((category, categoryIndex) => {
     const categoryRows = totals.byCategory[category] ?? [];
     const categoryPages = splitPages(categoryRows, ITEMS_PER_PAGE);
 
@@ -205,6 +196,13 @@ export const renderPrintPage = () => {
 
   const previewRoot = document.createElement("div");
   previewRoot.className = "print-preview-pages";
+
+  if (printData.pages.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "panel-card__text";
+    empty.textContent = "印刷対象の棚卸データがありません。";
+    previewRoot.appendChild(empty);
+  }
 
   printData.pages.forEach((pageData) => {
     const sheet = document.createElement("section");

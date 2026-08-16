@@ -6,6 +6,7 @@ export const ROUTES = {
   REGISTER: "register",
   ALLOCATION: "allocation",
   INVENTORY: "inventory",
+  HISTORY: "history",
   SUMMARY: "summary",
   PRINT: "print"
 };
@@ -16,6 +17,7 @@ export const ROUTE_TITLES = {
   [ROUTES.REGISTER]: "商品登録",
   [ROUTES.ALLOCATION]: "商品振り分け",
   [ROUTES.INVENTORY]: "棚卸実施",
+  [ROUTES.HISTORY]: "過去の棚卸",
   [ROUTES.SUMMARY]: "集計",
   [ROUTES.PRINT]: "印刷"
 };
@@ -25,6 +27,7 @@ export const HOME_CARDS = [
   { label: "商品登録", route: ROUTES.REGISTER },
   { label: "商品振り分け", route: ROUTES.ALLOCATION },
   { label: "棚卸実施", route: ROUTES.INVENTORY },
+  { label: "過去の棚卸", route: ROUTES.HISTORY },
   { label: "集計", route: ROUTES.SUMMARY },
   { label: "印刷", route: ROUTES.PRINT }
 ];

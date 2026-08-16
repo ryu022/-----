@@ -442,6 +442,58 @@ html {
   font-weight: 700;
 }
 
+.inventory-complete-wrap {
+  position: sticky;
+  bottom: 12px;
+  z-index: 8;
+}
+
+.inventory-complete-button {
+  min-height: 56px;
+  font-size: 1.08rem;
+}
+
+.history-list {
+  display: grid;
+  gap: 10px;
+}
+
+.history-item {
+  gap: 6px;
+}
+
+.history-item__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.history-delete-button {
+  min-height: 48px;
+}
+
+.history-detail-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.history-table-wrap {
+  overflow-x: auto;
+}
+
+.history-qty-input {
+  min-height: 40px;
+  max-width: 120px;
+}
+
 .print-sheet {
   background: #fff;
   border: 1px solid #d1d5db;
