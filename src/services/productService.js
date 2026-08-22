@@ -84,6 +84,53 @@ class ProductService {
     return { success: true, product: result.product };
   }
 
+  // 商品一括登録: 各行を既存バリデーション/採番ルールで検証し、有効な行だけまとめてGASへ送信する。
+  async createProductsBulk(rows) {
+    const validatedRows = rows.map((rawInput) => ({
+      rawInput,
+      validation: productValidator.validateRequired(rawInput)
+    }));
+
+    const errors = [];
+    let nextNumeric = Number(String(this.repository.nextId()).replace(/^P/, ""));
+
+    const preparedProducts = [];
+    validatedRows.forEach(({ rawInput, validation }, index) => {
+      if (!validation.isValid) {
+        errors.push({
+          row: index + 1,
+          name: rawInput.name || "",
+          message: Object.values(validation.errors).join(" / ")
+        });
+        return;
+      }
+
+      const payload = ProductModel.fromForm(rawInput);
+      const model = new ProductModel({ id: `P${String(nextNumeric).padStart(6, "0")}`, ...payload });
+      nextNumeric += 1;
+      preparedProducts.push({ row: index + 1, name: model.name, model });
+    });
+
+    if (preparedProducts.length === 0) {
+      return { successCount: 0, failCount: errors.length, errors };
+    }
+
+    const result = await this.repository.bulkAddWithSync(preparedProducts.map((item) => item.model));
+
+    if (!result.success) {
+      preparedProducts.forEach((item) => {
+        errors.push({ row: item.row, name: item.name, message: result.error || "登録に失敗しました。" });
+      });
+      return { successCount: 0, failCount: errors.length, errors: errors.sort((a, b) => a.row - b.row) };
+    }
+
+    return {
+      successCount: preparedProducts.length,
+      failCount: errors.length,
+      errors: errors.sort((a, b) => a.row - b.row)
+    };
+  }
+
   deleteProduct(id) {
     return this.repository.remove(id);
   }

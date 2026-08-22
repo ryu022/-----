@@ -107,6 +107,34 @@ export class ProductRepository {
     }
   }
 
+  // 一括登録用: 複数商品をまとめてGASへ送信する(1件ずつのupsert通信を避ける)。
+  async bulkAddWithSync(products) {
+    const normalized = products.map((product) => normalizeProduct(product, this.storeId));
+    normalized.forEach((product) => this.products.push(product));
+    sortById(this.products);
+    this.persist();
+
+    if (!gasApiClient.isEnabled()) {
+      return { success: true, products: normalized.map(clone) };
+    }
+
+    try {
+      await gasApiClient.request({
+        entity: "products",
+        action: "bulkUpsert",
+        payload: { items: normalized }
+      });
+      return { success: true, products: normalized.map(clone) };
+    } catch (error) {
+      this.lastSyncError = error instanceof Error ? error.message : "product bulk sync failed";
+      return {
+        success: false,
+        error: "Googleスプレッドシートへの一括保存に失敗しました。",
+        products: normalized.map(clone)
+      };
+    }
+  }
+
   async updateWithSync(id, nextValues) {
     const index = this.products.findIndex((product) => product.id === id);
     if (index < 0) {
