@@ -89,8 +89,13 @@ export class InventoryRepository {
       }
     }
 
-    if (gasApiClient.isEnabled()) {
-      await this.pullFromGas();
+    // inventorySessions/listは重いため起動時には取得しない(過去の棚卸画面を開いた時にsyncSessionsFromGasで取得する)。
+    if (gasApiClient.isEnabled() && this.activeSessionId) {
+      try {
+        await this.loadRecordsBySessionId(this.activeSessionId, { force: true });
+      } catch (error) {
+        this.lastSyncError = error instanceof Error ? error.message : "inventory pull failed";
+      }
     }
 
     const activeSession = this.sessions.find((session) => session.sessionId === this.activeSessionId);
@@ -439,7 +444,12 @@ export class InventoryRepository {
     window.localStorage.setItem(getActiveSessionStorageKey(this.storeId), this.activeSessionId);
   }
 
-  async pullFromGas() {
+  // 過去の棚卸一覧を開いたタイミングで呼び出す想定の遅延同期(起動時には呼ばない)。
+  async syncSessionsFromGas() {
+    if (!gasApiClient.isEnabled()) {
+      return;
+    }
+
     try {
       const remoteSessions = await gasApiClient.request({
         entity: "inventorySessions",
@@ -452,10 +462,7 @@ export class InventoryRepository {
         this.sessions = remoteSessions
           .filter((item) => item && (item.storeId === this.storeId || !item.storeId))
           .map((item) => normalizeSession(item, this.storeId));
-      }
-
-      if (this.activeSessionId) {
-        await this.loadRecordsBySessionId(this.activeSessionId, { force: true });
+        this.persistSessions();
       }
     } catch (error) {
       this.lastSyncError = error instanceof Error ? error.message : "inventory pull failed";

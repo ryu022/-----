@@ -415,5 +415,14 @@ export const renderPastInventoryPage = ({ navigate }) => {
   };
 
   rerender();
+
+  // 過去の棚卸一覧はローカルデータで即表示し、GAS上の最新一覧はバックグラウンドで取得する。
+  inventoryService.syncSessionsFromGas().then(() => {
+    refreshSessions();
+    if (!selectedSessionId) {
+      rerender();
+    }
+  });
+
   return page;
 };

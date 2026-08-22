@@ -43,6 +43,11 @@ class InventoryService {
     return this.repository.getSessionById(sessionId);
   }
 
+  // 過去の棚卸一覧画面を開いたタイミングで呼び出す遅延同期(起動時には呼ばれない)。
+  async syncSessionsFromGas() {
+    await this.repository.syncSessionsFromGas();
+  }
+
   async loadSessionRecordsForView(sessionId, { force = true } = {}) {
     const session = this.repository.getSessionById(sessionId);
     if (!session) {

@@ -26,6 +26,10 @@
     display: none !important;
   }
 
+  .print-preview-card > .panel-card__title {
+    display: none !important;
+  }
+
   .app-main {
     width: 100%;
     padding: 0;

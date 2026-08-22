@@ -81,11 +81,25 @@ const attachNetworkStatus = () => {
 
 onRouteChange(render);
 
-await productService.initialize();
-await assignmentService.initialize(productService.listProducts());
-await inventoryService.initialize();
+// ホーム画面はGAS同期を必要としないため、先に描画してから同期をバックグラウンドで実行する。
 initRouter();
 render(getCurrentRoute());
+
+const initServices = async () => {
+  try {
+    // productとinventoryは互いに独立しているため並列実行し、assignmentはproduct完了後に実行する。
+    const productInit = productService.initialize();
+    const inventoryInit = inventoryService.initialize();
+
+    await productInit;
+    await assignmentService.initialize(productService.listProducts());
+    await inventoryInit;
+  } catch (error) {
+    console.error("Service initialization failed:", error);
+  }
+};
+
+initServices();
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {

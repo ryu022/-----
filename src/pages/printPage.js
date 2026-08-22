@@ -283,6 +283,8 @@ export const renderPrintPage = () => {
   const body = document.createElement("div");
   body.className = "page-stack";
   body.append(actions, previewRoot);
-  page.appendChild(createSectionCard({ title: "A4縦 プレビュー", body }));
+  const previewCard = createSectionCard({ title: "A4縦 プレビュー", body });
+  previewCard.classList.add("print-preview-card");
+  page.appendChild(previewCard);
   return page;
 };
